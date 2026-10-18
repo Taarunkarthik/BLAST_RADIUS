@@ -39,6 +39,30 @@ function analyze({ root: rootInput, files }) {
   const existenceCache = new Map();
   const realpathCache = new Map();
   const packageCache = new Map();
+  const sourceFiles = new Map(files.filter(input => input.checker === 'javascript').map(input => {
+    const absolute = path.resolve(root, input.file);
+    return [absolute, ts.createSourceFile(absolute, input.content, ts.ScriptTarget.Latest, true)];
+  }));
+  // A memory-only compiler host supplies grammar checks and lexical binding. No
+  // standard libraries, project modules, emit, or semantic diagnostics are loaded.
+  let syntaxProgram;
+  const program = () => {
+    if (!syntaxProgram) {
+      syntaxProgram = ts.createProgram([...sourceFiles.keys()], {
+        allowJs: true, noLib: true, noResolve: true, noEmit: true,
+        target: ts.ScriptTarget.Latest, jsx: ts.JsxEmit.Preserve,
+      }, {
+        getSourceFile: name => sourceFiles.get(path.resolve(name)),
+        getDefaultLibFileName: () => '', writeFile: () => {},
+        getCurrentDirectory: () => root, getDirectories: () => [],
+        fileExists: name => sourceFiles.has(path.resolve(name)),
+        readFile: name => sourceFiles.get(path.resolve(name))?.text,
+        getCanonicalFileName: name => name, useCaseSensitiveFileNames: () => true,
+        getNewLine: () => '\n',
+      });
+    }
+    return syntaxProgram;
+  };
   const fileExists = file => {
     if (!existenceCache.has(file)) {
       try { existenceCache.set(file, fs.statSync(file).isFile()); }
@@ -127,7 +151,7 @@ function analyze({ root: rootInput, files }) {
     if (input.checker === 'css') {
       output.references = [];
       try {
-        const tree = file.endsWith('.scss') ? scss.parse(input.content, { from: file }) : postcss.parse(input.content, { from: file });
+        const tree = /\.scss$/i.test(file) ? scss.parse(input.content, { from: file }) : postcss.parse(input.content, { from: file });
         tree.walkAtRules(/^(import|use|forward)$/i, rule => {
           // Sass interpolation and load-path modules cannot be resolved without a build configuration.
           for (const match of rule.params.matchAll(/(?:url\(\s*)?["']([^"']+)["']|url\(\s*([^\s)]+)\s*\)/g)) {
@@ -140,8 +164,9 @@ function analyze({ root: rootInput, files }) {
       result.push(output);
       continue;
     }
-    const source = ts.createSourceFile(absolute, input.content, ts.ScriptTarget.Latest, true);
-    for (const diagnostic of source.parseDiagnostics) {
+    const source = sourceFiles.get(absolute);
+    const diagnostics = /\.(?:[cm]?js|jsx)$/i.test(file) ? program().getSyntacticDiagnostics(source) : source.parseDiagnostics;
+    for (const diagnostic of diagnostics) {
       const line = source.getLineAndCharacterOfPosition(diagnostic.start || 0).line + 1;
       output.issues.push(issue(file, line, 'parse_error', '', ts.flattenDiagnosticMessageText(diagnostic.messageText, '\n')));
     }
@@ -161,7 +186,7 @@ function analyze({ root: rootInput, files }) {
         imports.push({ expression: node.moduleSpecifier, typeOnly: Boolean(typeOnly), commonjs: false });
       } else if (ts.isImportEqualsDeclaration(node) && ts.isExternalModuleReference(node.moduleReference) && node.moduleReference.expression) {
         imports.push({ expression: node.moduleReference.expression, typeOnly: node.isTypeOnly, commonjs: true });
-      } else if (ts.isCallExpression(node) && (node.expression.kind === ts.SyntaxKind.ImportKeyword || (ts.isIdentifier(node.expression) && node.expression.text === 'require'))) {
+      } else if (ts.isCallExpression(node) && (node.expression.kind === ts.SyntaxKind.ImportKeyword || (ts.isIdentifier(node.expression) && node.expression.text === 'require' && !program().getTypeChecker().getSymbolAtLocation(node.expression)?.declarations?.some(declaration => declaration.getSourceFile() === source && !declaration.getSourceFile().isDeclarationFile)))) {
         if (node.arguments[0]) imports.push({ expression: node.arguments[0], typeOnly: false, commonjs: node.expression.kind !== ts.SyntaxKind.ImportKeyword });
       } else if (ts.isImportTypeNode(node) && ts.isLiteralTypeNode(node.argument)) {
         imports.push({ expression: node.argument.literal, typeOnly: true, commonjs: false });
@@ -206,7 +231,7 @@ function analyze({ root: rootInput, files }) {
       }
       const resolution = ts.resolveModuleName(specifier, absolute, config.options, ts.sys, config.cache, undefined,
         item.commonjs ? ts.ModuleKind.CommonJS : ts.ModuleKind.ESNext).resolvedModule;
-      if (resolution && !resolution.isExternalLibraryImport && inside(root, resolution.resolvedFileName) && !posix(resolution.resolvedFileName).includes('/node_modules/')) {
+      if (resolution && inside(root, resolution.resolvedFileName) && !posix(path.relative(root, resolution.resolvedFileName)).split('/').includes('node_modules')) {
         if (!sourcePattern.test(resolution.resolvedFileName) || /\.d\.[cm]?ts$/.test(resolution.resolvedFileName)) {
           output.ignored_imports.push({ file, line, target: specifier, reason: 'non-source or declaration-only import' });
         } else {

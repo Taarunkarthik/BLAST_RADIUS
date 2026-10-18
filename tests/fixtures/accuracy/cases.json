@@ -1,0 +1,54 @@
+[
+  {
+    "name": "workspace-ui",
+    "files": {
+      "package.json": "{\"private\":true,\"workspaces\":[\"packages/*\"]}",
+      "tsconfig.json": "{\"compilerOptions\":{\"baseUrl\":\".\",\"paths\":{\"@ui/*\":[\"packages/ui/src/*\"]}}}",
+      "packages/ui/package.json": "{\"name\":\"@app/ui\"}",
+      "packages/ui/src/button.tsx": "export const Button = () => <button>Save</button>;",
+      "packages/web/package.json": "{\"name\":\"@app/web\"}",
+      "packages/web/src/app.tsx": "import {Button} from '@ui/button'; import './missing'; export const App = Button;",
+      "packages/web/src/local.js": "function run(require) { return require('local'); }",
+      "packages/web/src/invalid.js": "const count: number = 1;"
+    },
+    "expected": [
+      ["packages/web/src/app.tsx", "missing_local_module", "./missing"],
+      ["packages/web/src/invalid.js", "parse_error", ""]
+    ]
+  },
+  {
+    "name": "configuration-and-docs",
+    "files": {
+      "schema.json": "{\"definitions\":{\"item\":{}},\"$ref\":\"#/definitions/item\"}",
+      "broken.json": "{\"$ref\":\"schema.json#/missing\"}",
+      "workflow.yaml": "jobs:\n\tbuild: yes\n",
+      "script.yaml": "script: |\n  \tprintf hello\n",
+      "README.md": "[Guide](docs/guide.md)\n\n[Missing](docs/missing.md)\n\n`[Example](not-a-link.md)`",
+      "docs/guide.md": "# Guide\n\n[Home](../README.md)",
+      "public/icon.svg": "<svg/>",
+      "index.html": "<img src='/public/icon.svg'><script src='./missing.js'></script>",
+      "theme.scss": "@use 'colors'; @import 'missing'; .button { color: $primary; }",
+      "_colors.scss": "$primary: red;"
+    },
+    "expected": [
+      ["broken.json", "broken_json_ref", "schema.json#/missing"],
+      ["workflow.yaml", "tabs_in_yaml", ""],
+      ["README.md", "broken_link", "docs/missing.md"],
+      ["index.html", "missing_asset", "./missing.js"],
+      ["theme.scss", "missing_css_import", "missing"]
+    ]
+  },
+  {
+    "name": "commonjs-library",
+    "files": {
+      "package.json": "{\"name\":\"library\",\"dependencies\":{\"not-installed\":\"1.0.0\"}}",
+      "index.cjs": "module.exports = require('./lib');",
+      "lib.js": "const fs = require('node:fs'); const data = require('./data.json'); exports.x = require('not-installed');",
+      "data.json": "{}",
+      "other.js": "const run = ({require}) => require('not-a-module'); export {run};",
+      "cycle-a.js": "module.exports = require('./cycle-b');",
+      "cycle-b.js": "module.exports = require('./cycle-a');"
+    },
+    "expected": [["lib.js", "declared_but_not_installed", "not-installed"]]
+  }
+]

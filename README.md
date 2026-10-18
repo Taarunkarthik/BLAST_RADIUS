@@ -33,7 +33,7 @@ python -m pip install -e ".[dev]"
 blastradius setup
 ```
 
-`setup` is the explicit installation step that contacts npm. It uses the checked-in lockfile and disables install scripts. `scan` never installs packages, fetches URLs, runs project code, or changes target files.
+`setup` is the explicit installation step that contacts npm. It uses the checked-in lockfile and disables install scripts. Ordinary scans never install packages, fetch URLs, run project code, or change target files. `scan --save` explicitly connects to the configured PostgreSQL store.
 
 For a built wheel, install it with `pip install path/to/blastradius-0.1.0-py3-none-any.whl`, then run `blastradius setup` in that Python environment.
 
@@ -127,7 +127,7 @@ Read [the implementation phases and status](docs/PHASES.md), [the implementation
 
 This is a static diagnostic MVP. It does not run a type checker, compile Sass, validate CSS property values, execute bundler configuration, or prove runtime behavior. Computed JS imports and custom bundler resolvers may leave partial coverage. Sass package load paths and interpolation are not resolved. Remote links are not requested; HTML/Markdown anchor fragments are not validated. JSON references use filesystem-relative paths; nested JSON Schema `$id` rebasing is not implemented.
 
-PostgreSQL persistence (`--save`), saved-scan comparison, and a browser harness are optional PRD milestones and are not implemented in this release. Python, Go, and Rust files appear as unsupported, as specified for the MVP.
+PostgreSQL persistence and saved-scan comparison are available through the optional `postgres` extra. See [saved scans and comparison](docs/persistence.md) for registration, migrations, and commands. A browser harness is the remaining optional milestone. Python, Go, and Rust files appear as unsupported, as specified for the MVP.
 
 ## Development
 
