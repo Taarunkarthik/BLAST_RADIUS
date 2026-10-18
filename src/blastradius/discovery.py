@@ -61,12 +61,14 @@ def discover(root: Path) -> list[DiscoveredFile]:
                     ignored = result.include
             if ignored:
                 continue
-            if entry.is_symlink() or (hasattr(path, "is_junction") and path.is_junction()):
+            if entry.is_symlink() or (is_dir and hasattr(path, "is_junction") and path.is_junction()):
                 files.append(DiscoveredFile(rel, route(rel), "symbolic link or junction"))
             elif is_dir:
                 walk(path, rules)
-            else:
+            elif entry.is_file(follow_symlinks=False):
                 files.append(DiscoveredFile(rel, route(rel), "type declaration" if is_declaration(rel) else None))
+            else:
+                files.append(DiscoveredFile(rel, route(rel), "non-regular file"))
 
     walk(root, [])
     return sorted(files, key=lambda file: file.path)

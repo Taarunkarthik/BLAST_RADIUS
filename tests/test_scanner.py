@@ -137,3 +137,50 @@ def test_invalid_config_does_not_invent_missing_imports(repository):
     assert {item["type"] for item in report["issues"]} == {"unsupported_resolution"}
     assert report["scan"]["partial"]
 
+
+def test_tsconfig_extends_and_nearest_nested_configuration(repository):
+    root = repository({
+        "base.json": {"compilerOptions": {"baseUrl": ".", "paths": {"@lib": ["lib.ts"]}}},
+        "tsconfig.json": {"extends": "./base.json"},
+        "lib.ts": "export const x = 1;",
+        "main.ts": "import {x} from '@lib';",
+        "nested/tsconfig.json": {"compilerOptions": {"paths": {"@lib": ["./local.ts"]}}},
+        "nested/local.ts": "export const x = 2;",
+        "nested/main.ts": "import {x} from '@lib';",
+    })
+    report = scan_repository(root)
+    assert report["issues"] == []
+    assert {"source": "file:nested/main.ts", "target": "file:nested/local.ts"} in report["graph"]["edges"]
+    assert {"source": "file:main.ts", "target": "file:lib.ts"} in report["graph"]["edges"]
+
+
+def test_package_exports_and_types_only_installation(repository):
+    root = repository({
+        "package.json": {"dependencies": {"pkg": "1.0.0", "runtime": "1.0.0"}, "devDependencies": {"@types/runtime": "1.0.0"}},
+        "main.ts": "import 'pkg'; import 'pkg/private'; import 'runtime';",
+        "node_modules/pkg/package.json": {"name": "pkg", "version": "1.0.0", "exports": {".": "./main.js"}},
+        "node_modules/pkg/main.js": "throw new Error('must never execute');",
+        "node_modules/pkg/private.js": "module.exports = {};",
+        "node_modules/@types/runtime/package.json": {"name": "@types/runtime", "version": "1.0.0", "types": "index.d.ts"},
+        "node_modules/@types/runtime/index.d.ts": "export const x: number;",
+    })
+    issues = scan_repository(root)["issues"]
+    assert {(item["target"], item["type"]) for item in issues} == {("pkg/private", "unsupported_resolution"), ("runtime", "declared_but_not_installed")}
+
+
+def test_static_parser_never_interprets_import_text_in_comments_or_strings(repository):
+    root = repository({"main.ts": '''// import 'ghost';
+const text = "require('phantom')";
+/* export * from 'imaginary'; */
+export {text};
+'''})
+    report = scan_repository(root)
+    assert report["issues"] == []
+    assert report["graph"]["edges"] == []
+
+
+def test_coverage_partition_is_complete(repository):
+    root = repository({"a.ts": "", "b.ts": "", "defs.d.ts": "", "icon.svg": "", "config.json": "{}"})
+    scan = scan_repository(root, max_files=1)["scan"]
+    assert scan["files_discovered"] == scan["files_checked"] + scan["not_checked_count"] + len(scan["excluded_files"]) + len(scan["skipped_files"])
+

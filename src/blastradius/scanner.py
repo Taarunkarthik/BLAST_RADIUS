@@ -49,7 +49,11 @@ def scan_repository(root: Path, *, mode="all", deterministic=False, max_files=50
             if path.stat().st_size > max_bytes:
                 skipped.append({"file": item.path, "reason": "file size limit"})
                 continue
-            raw = path.read_bytes()
+            with path.open("rb") as stream:
+                raw = stream.read(max_bytes + 1)
+            if len(raw) > max_bytes:
+                skipped.append({"file": item.path, "reason": "file size limit"})
+                continue
             content = raw.decode("utf-8-sig")
             if "\0" in content:
                 raise ValueError("binary content in a text file")
@@ -84,8 +88,9 @@ def scan_repository(root: Path, *, mode="all", deterministic=False, max_files=50
                 issues.extend(css_issues)
                 limitations.extend(css_limits)
     graph_files = [file for file in checked if sources[file] == "javascript"]
+    graph_file_set = set(graph_files)
     # Imports to excluded source files are retained in the graph but coverage is explicit.
-    outside = sorted({item["target"][5:] for item in imports if item["target"].startswith("file:") and item["target"][5:] not in graph_files})
+    outside = sorted({item["target"][5:] for item in imports if item["target"].startswith("file:") and item["target"][5:] not in graph_file_set})
     for file in outside:
         limitations.append({"file": file, "reason": "Imported source is outside the checked file set."})
     resolution_incomplete = any(issue.type == "unsupported_resolution" for issue in issues)

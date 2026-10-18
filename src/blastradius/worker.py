@@ -66,9 +66,13 @@ class NodeWorker:
 
     def close(self):
         if self.process.poll() is None:
-            self.process.terminate()
+            # EOF lets readline drain and exit normally; terminate only a stuck worker.
             try:
-                self.process.wait(timeout=3)
+                self.process.stdin.close()
+            except OSError:
+                pass
+            try:
+                self.process.wait(timeout=1)
             except subprocess.TimeoutExpired:
                 self.process.kill()
                 self.process.wait()

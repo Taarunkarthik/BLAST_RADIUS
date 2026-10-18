@@ -38,6 +38,10 @@ def test_yaml_tabs_report_line_without_duplicate_parse_error():
     assert issues[0].line == 2
 
 
+def test_yaml_tabs_inside_block_scalar_are_content():
+    assert not check_yaml("ci.yaml", "script: |\n  \tprintf hello\n")
+
+
 def test_html_assets_base_queries_encoded_paths_and_remote_urls(repository):
     root = repository({"public/a b.png": b"png", "public/main.js": ""})
     content = '''<base href="/public/">
@@ -54,6 +58,12 @@ def test_html_assets_base_queries_encoded_paths_and_remote_urls(repository):
 def test_html_srcset_with_data_url(repository):
     root = repository({"ok.png": b"png"})
     issues = check_html(root, "index.html", '<img srcset="data:image/png;base64,AAAA 1x, ok.png 2x, missing.png 3x">')
+    assert [item.target for item in issues] == ["missing.png"]
+
+
+def test_html_srcset_without_whitespace(repository):
+    root = repository({"ok.png": b"png"})
+    issues = check_html(root, "index.html", '<img srcset="ok.png,missing.png">')
     assert [item.target for item in issues] == ["missing.png"]
 
 

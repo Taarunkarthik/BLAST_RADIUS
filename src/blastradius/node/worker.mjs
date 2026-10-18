@@ -16,7 +16,6 @@ const inside = (root, file) => {
   const relative = path.relative(root, file);
   return relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative);
 };
-const fileExists = file => { try { return fs.statSync(file).isFile(); } catch { return false; } };
 const readJson = file => { try { return JSON.parse(fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, '')); } catch { return null; } };
 const issue = (file, line, type, target = '', message = '', severity = 'high') => ({ file, line, type, severity, target, message });
 
@@ -36,6 +35,17 @@ function analyze({ root: rootInput, files }) {
   const configCache = new Map();
   const directoryConfigCache = new Map();
   const manifestCache = new Map();
+  const directoryManifestCache = new Map();
+  const existenceCache = new Map();
+  const realpathCache = new Map();
+  const packageCache = new Map();
+  const fileExists = file => {
+    if (!existenceCache.has(file)) {
+      try { existenceCache.set(file, fs.statSync(file).isFile()); }
+      catch { existenceCache.set(file, false); }
+    }
+    return existenceCache.get(file);
+  };
   const result = [];
   function configuration(file) {
     const directory = path.dirname(file);
@@ -69,23 +79,34 @@ function analyze({ root: rootInput, files }) {
   }
 
   function manifest(file) {
-    for (const parent of ancestors(path.dirname(file), root)) {
+    const directory = path.dirname(file);
+    if (directoryManifestCache.has(directory)) return directoryManifestCache.get(directory);
+    for (const parent of ancestors(directory, root)) {
       const candidate = path.join(parent, 'package.json');
       if (fileExists(candidate)) {
         if (!manifestCache.has(candidate)) manifestCache.set(candidate, readJson(candidate) || {});
-        return manifestCache.get(candidate);
+        const value = manifestCache.get(candidate);
+        directoryManifestCache.set(directory, value);
+        return value;
       }
     }
-    return {};
+    directoryManifestCache.set(directory, {});
+    return directoryManifestCache.get(directory);
   }
 
   function installedPackage(file, name) {
+    const key = `${path.dirname(file)}:${name}`;
+    if (packageCache.has(key)) return packageCache.get(key);
     for (const parent of ancestors(path.dirname(file), root)) {
       const directory = path.join(parent, 'node_modules', name);
-      if (fileExists(path.join(directory, 'package.json'))) return readJson(path.join(directory, 'package.json')) || {};
+      if (fileExists(path.join(directory, 'package.json'))) {
+        packageCache.set(key, readJson(path.join(directory, 'package.json')) || {});
+        return packageCache.get(key);
+      }
       // Packages can omit package.json while still exposing index.js.
-      if (fileExists(path.join(directory, 'index.js'))) return {};
+      if (fileExists(path.join(directory, 'index.js'))) { packageCache.set(key, {}); return {}; }
     }
+    packageCache.set(key, null);
     return null;
   }
 
@@ -189,7 +210,8 @@ function analyze({ root: rootInput, files }) {
         if (!sourcePattern.test(resolution.resolvedFileName) || /\.d\.[cm]?ts$/.test(resolution.resolvedFileName)) {
           output.ignored_imports.push({ file, line, target: specifier, reason: 'non-source or declaration-only import' });
         } else {
-          const real = fs.realpathSync(resolution.resolvedFileName);
+          if (!realpathCache.has(resolution.resolvedFileName)) realpathCache.set(resolution.resolvedFileName, fs.realpathSync(resolution.resolvedFileName));
+          const real = realpathCache.get(resolution.resolvedFileName);
           if (!inside(root, real)) addIssue('invalid_path', 'Resolved module points outside the scan root.');
           else addEdge(`file:${posix(path.relative(root, resolution.resolvedFileName))}`);
         }

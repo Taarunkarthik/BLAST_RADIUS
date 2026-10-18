@@ -103,21 +103,33 @@ def check_json(root: Path, file: str, content: str) -> list[Issue]:
 
 def check_yaml(file: str, content: str) -> list[Issue]:
     issues = []
+    scalar_lines = set()
     for number, line in enumerate(content.splitlines(), 1):
         if "\t" in re.match(r"^[ \t]*", line)[0]:
             issues.append(Issue(file, number, "tabs_in_yaml", "medium", message="Tab character in YAML indentation."))
     try:
         # Compose nodes rather than constructing Python objects: custom tags stay inert,
         # alias trees are not expanded, and multi-document YAML is accepted.
-        for _ in yaml.compose_all(content, Loader=yaml.SafeLoader):
-            pass
+        pending = list(yaml.compose_all(content, Loader=yaml.SafeLoader))
+        visited = set()
+        while pending:
+            node = pending.pop()
+            if node is None or id(node) in visited:
+                continue
+            visited.add(id(node))
+            if isinstance(node, yaml.ScalarNode) and node.style in {"|", ">"}:
+                scalar_lines.update(range(node.start_mark.line + 2, node.end_mark.line + 1))
+            elif isinstance(node, yaml.MappingNode):
+                pending.extend(child for pair in node.value for child in pair)
+            elif isinstance(node, yaml.SequenceNode):
+                pending.extend(node.value)
     except (yaml.YAMLError, RecursionError) as error:
         mark = getattr(error, "problem_mark", None)
         line = mark.line + 1 if mark else 1
         if not any(item.type == "tabs_in_yaml" and item.line == line for item in issues):
             message = getattr(error, "problem", None) or "Invalid or excessively nested YAML."
             issues.append(Issue(file, line, "invalid_yaml", "medium", message=message))
-    return issues
+    return [issue for issue in issues if not (issue.type == "tabs_in_yaml" and issue.line in scalar_lines)]
 
 
 class AssetParser(HTMLParser):
@@ -145,7 +157,7 @@ class AssetParser(HTMLParser):
             remaining = values["srcset"]
             while remaining:
                 remaining = remaining.lstrip(" ,\t\r\n")
-                match = re.match(r"\S+", remaining)
+                match = re.match(r"\S+" if remaining.startswith("data:") else r"[^\s,]+,?", remaining)
                 if not match:
                     break
                 target = match[0]
