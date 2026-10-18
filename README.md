@@ -121,7 +121,7 @@ Python CLI -> deterministic walker -> file router
 
 The Node subprocess stays alive for the scan and shares TypeScript resolution caches across files. TypeScript uses the nearest tsconfig/jsconfig, path mappings, package exports, and nearest package manifest. Bundler resolution is the default when a project has no compiler configuration. Built-ins, declaration-only targets, and non-source imports are excluded from graph propagation.
 
-Read [the implementation decisions](docs/implementation-decisions.md), [the report contract](docs/report-contract.md), and [the supplied v3.0 PRD](docs/product-requirements-v3.txt).
+Read [the implementation phases and status](docs/PHASES.md), [the implementation decisions](docs/implementation-decisions.md), [the report contract](docs/report-contract.md), and [the supplied v3.0 PRD](docs/product-requirements-v3.txt).
 
 ## Limits of this release
 
