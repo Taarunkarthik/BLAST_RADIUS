@@ -203,3 +203,21 @@ def compare(ctx: typer.Context, base: str, head: str, format: Format | None = ty
             typer.echo(f"Coverage: {warning}")
     threshold = fail_on or (ctx.obj or {}).get("fail_on", Threshold.high)
     raise typer.Exit(comparison_exit_code(result, threshold.value))
+
+
+@app.command("harness")
+def harness(path: Path = typer.Option(Path("."), help="Root directory the browser may scan."), port: int = typer.Option(8765, min=1024, max=65535)):
+    """Serve the local browser interface on 127.0.0.1 only."""
+    try:
+        import uvicorn
+
+        from blastradius.harness import create_app
+        application = create_app(path)
+    except ImportError as error:
+        typer.echo("Install the browser extra: pip install 'blastradius[harness]'.", err=True)
+        raise typer.Exit(2) from error
+    except (OSError, ValueError) as error:
+        typer.echo(f"Cannot start harness: {error}", err=True)
+        raise typer.Exit(2) from error
+    typer.echo(f"BlastRadius: http://127.0.0.1:{port} (root: {path.resolve()})")
+    uvicorn.run(application, host="127.0.0.1", port=port, access_log=False, log_level="warning")

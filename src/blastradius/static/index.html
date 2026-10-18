@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="blastradius-token" content="__SESSION_TOKEN__">
+  <title>BlastRadius · Repository health</title>
+  <link rel="stylesheet" href="styles.css">
+  <script type="module" src="app.js"></script>
+</head>
+<body>
+  <aside class="sidebar">
+    <a class="brand" href="/" aria-label="BlastRadius home"><span class="brand-mark" aria-hidden="true">◎</span><span>BLAST<span class="accent">RADIUS</span><small>REPOSITORY INTELLIGENCE</small></span></a>
+    <div class="nav-label">WORKSPACE</div>
+    <nav aria-label="Report sections">
+      <button class="nav-item active" data-view="overview"><span aria-hidden="true">◈</span> Overview</button>
+      <button class="nav-item" data-view="findings"><span aria-hidden="true">≋</span> Findings <span id="nav-count" class="count">0</span></button>
+      <button class="nav-item" data-view="coverage"><span aria-hidden="true">▦</span> Coverage</button>
+      <button class="nav-item" data-view="history"><span aria-hidden="true">◷</span> Saved scans</button>
+    </nav>
+    <div class="sidebar-bottom"><span class="status-dot"></span> Local workspace<p>Your source stays on this machine.<br>Scans never change your files.</p></div>
+  </aside>
+  <main>
+    <header class="topbar"><div><span class="muted">Workspace / </span><strong id="project-name">Connecting…</strong></div><span class="pill">READ-ONLY SCANNER</span></header>
+    <section class="page-heading"><div><div class="eyebrow">SEE THE WHOLE PICTURE</div><h1>Repository health<span class="accent">.</span></h1><p>Find what’s broken. Understand what depends on it.</p></div><div id="scan-state" class="scan-state">Ready to scan</div></section>
+    <form id="scan-form" class="scan-controls">
+      <div class="field path-field"><label for="scan-path">Directory within workspace</label><input id="scan-path" value="." autocomplete="off" spellcheck="false"><small id="root-path"></small></div>
+      <div class="field"><label for="scan-mode">Scan mode</label><select id="scan-mode"><option value="all">Full scan</option><option value="structure">Structure only</option><option value="health">Health only</option></select></div>
+      <button id="scan-button" class="primary" type="submit">Run scan <span aria-hidden="true">↗</span></button>
+    </form>
+    <div id="notice" role="status" aria-live="polite" hidden></div>
+    <section class="metrics" aria-label="Scan summary">
+      <article class="metric"><span>Files checked</span><strong id="metric-files">—</strong><small id="metric-coverage">Coverage appears after a scan</small></article>
+      <article class="metric"><span>Issues found</span><strong id="metric-issues">—</strong><small id="metric-breakdown">All configured checkers</small></article>
+      <article class="metric"><span>High severity</span><strong class="high-text" id="metric-high">—</strong><small>Broken syntax or dependencies</small></article>
+      <article class="metric"><span>Affected files</span><strong id="metric-affected">—</strong><small>Unique dependent JS/TS files</small></article>
+    </section>
+    <div id="report-actions" class="report-actions" hidden><span id="report-id" class="mono muted"></span><div><button id="save-button" class="secondary" hidden>Save scan</button><button id="export-button" class="secondary">Export JSON ↓</button></div></div>
+    <section id="scan-view" class="report-grid">
+      <article class="panel findings-panel">
+        <div class="panel-heading"><div><h2>Findings</h2><p>Diagnostics, ordered by severity</p></div><span id="finding-count" class="count">0</span></div>
+        <div class="filters"><input id="search" aria-label="Search findings" placeholder="Search files or issue types…"><select id="severity" aria-label="Filter severity"><option value="all">All severities</option><option value="high">High</option><option value="medium">Medium</option><option value="low">Low</option></select></div>
+        <div id="finding-list" class="finding-list"><div class="empty-state"><span aria-hidden="true">◎</span><h3>Start with a scan</h3><p>Choose a directory and run a scan to see<br>its health and dependency impact.</p></div></div>
+        <div id="pagination" class="pagination" hidden><button id="previous" class="secondary">← Previous</button><span id="page-label"></span><button id="next" class="secondary">Next →</button></div>
+      </article>
+      <article class="panel detail-panel"><div class="panel-heading"><div><h2>Tree impact</h2><p>Follow a failure through your code</p></div><span class="pill">JS / TS</span></div><div id="detail" class="detail"><div class="empty-state"><span aria-hidden="true">⌁</span><h3>Every dependency tells a story</h3><p>Select a finding to see its direct and<br>transitive dependents.</p></div></div></article>
+    </section>
+    <section id="coverage-view" class="panel" hidden><div class="panel-heading"><div><h2>Coverage</h2><p>A clear account of what was checked and what was not</p></div></div><div id="coverage" class="section-content"><p class="muted">Run a scan to inspect coverage.</p></div></section>
+    <section id="history-view" class="panel" hidden><div class="panel-heading"><div><h2>Saved scans</h2><p>Compare how this workspace changes over time</p></div><button id="refresh-history" class="secondary">Refresh</button></div><div class="section-content"><p id="history-note" class="muted"></p><div class="compare-controls"><div class="field"><label for="base-scan">Base scan</label><select id="base-scan"></select></div><span aria-hidden="true">→</span><div class="field"><label for="head-scan">Head scan</label><select id="head-scan"></select></div><button id="compare-button" class="primary" disabled>Compare scans</button></div><div id="comparison"></div><div id="history-list"></div></div></section>
+    <footer><span>BLASTRADIUS</span><p>Static analysis. Explicit coverage. No files changed.</p><span id="footer-status">Waiting for a scan</span></footer>
+  </main>
+</body>
+</html>

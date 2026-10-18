@@ -47,6 +47,12 @@ Graph nodes are normalized keys: `file:<relative POSIX path>`, `package:<name>`,
 
 An operational error returns `{"schema_version":1,"error":{"type":"scan_error","message":"..."}}` with exit code 2 in JSON mode. Per-file logs use stderr.
 
+## Saved reports and browser API
+
+`scan --save` adds a `storage` object containing `id` and `project_id` after the original report is saved. Use `storage.id` for comparisons. The stored full report excludes this response metadata. History records additionally include `saved_at`. See [persistence](persistence.md) for identity and comparison semantics.
+
+The local harness returns this same scan contract from `POST /api/scan` and `GET /api/report`. `POST /api/save` returns the storage metadata separately. Comparison responses contain `schema_version`, `base_id`, `head_id`, `summary`, `added`, `resolved`, `changed`, `unverified`, `warnings`, `partial`, and `coverage`. `summary.unchanged` is a count; changed records contain `base`, `head`, and changed field names. Saved comparisons also include `project_id`, `base_saved_id`, and `head_saved_id`. Browser errors use an HTTP status and `detail`; there is no browser-specific alternative diagnostic schema.
+
 ## Parser worker protocol v1
 
 The Python client launches the bundled `node/worker.mjs` once per scan, then exchanges one JSON object per line over stdin/stdout. It removes `NODE_OPTIONS` and `NODE_PATH` from the child environment. No target repository modules or scripts are loaded into the worker.

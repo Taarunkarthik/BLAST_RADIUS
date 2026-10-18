@@ -2,7 +2,7 @@
 
 The supplied v3.0 PRD is the product reference. It refers to missing v2.1 appendices (and to an Appendix E that is not included). These explicit decisions make the first implementation reviewable.
 
-- Implement the required CLI MVP first. PostgreSQL persistence, saved-scan comparison, and the optional browser harness remain later milestones.
+- Implement the required CLI MVP first, followed by optional PostgreSQL persistence, saved-scan comparison, and a local FastAPI browser harness. All are now implemented; ordinary CLI scans still need neither optional service.
 - A graph edge A -> B means A imports B. An issue propagates from the source file containing the issue. Eligible files are successfully parsed/scanned JS/TS source files, excluding declaration files. Affected counts exclude the failing file itself.
 - Report one deterministic shortest dependency path per affected file. Enumerating every path through a cyclic graph is unbounded. The full graph preserves all edges.
 - A file with no reverse dependents is labeled `CRITICAL — root node` as required. This is a graph property, not evidence that the file is a runtime entry point.
@@ -14,6 +14,9 @@ The supplied v3.0 PRD is the product reference. It refers to missing v2.1 append
 - JSON references validate local files and JSON Pointer fragments. Network references are excluded from local validation. HTML/Markdown validate local file targets; remote URLs and anchor-only links are not fetched or checked. Root-relative links resolve against the scan root.
 - Non-JS issues always say that their file type is outside the JS/TS dependency graph, even when an application imports that asset. A zero structural radius does not claim zero runtime impact.
 - Deterministic mode omits timestamps and absolute root paths, sorts output, and derives the scan ID from report content and checked file hashes.
+- Use TypeScript syntactic diagnostics for JavaScript grammar and symbol declarations to distinguish global CommonJS `require` from locally shadowed identifiers. This does not enable semantic type checking.
+- The missing database appendix is replaced by the documented [persistence design](persistence.md): immutable full reports plus normalized records, project-scoped saved IDs, transactional migrations, and top-20 impact rows. Compare conservatively when head coverage cannot establish that a finding was resolved.
+- The [browser harness](harness.md) binds only to loopback and scopes scans to its startup directory. It reuses the scanner and report contract, with static HTML/CSS/JavaScript instead of a separate React application. Saving and comparison remain explicit database actions.
 
 ## Parser references
 

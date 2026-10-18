@@ -61,6 +61,6 @@ All records for one saved scan commit together. Failure rolls back the scan and 
 
 ## Integration testing
 
-CI starts an isolated PostgreSQL 17 service and tests migrations, registration, save/load, normalized records, project matching, immutable IDs, rollback, and the CLI save/compare flow. Locally, set `BLASTRADIUS_TEST_DATABASE_URL` to an expendable test database and run `pytest -q tests/test_storage.py tests/test_comparison.py`. These tests create project/scan records; they never delete existing projects or drop a database.
+CI starts an isolated PostgreSQL 17 service and tests migrations, registration, save/load, normalized records, project matching, immutable IDs, rollback, the CLI save/compare flow, and the harness HTTP save/history/compare flow. Locally, install `.[dev,postgres,harness]`, set `BLASTRADIUS_TEST_DATABASE_URL` to an expendable test database, and run `pytest -q tests/test_storage.py tests/test_comparison.py`. These tests create project/scan records; they never delete existing projects or drop a database.
 
 Implementation references: [Psycopg transactions and parameterized queries](https://www.psycopg.org/psycopg3/docs/basic/usage.html), [PostgreSQL documentation](https://www.postgresql.org/docs/).

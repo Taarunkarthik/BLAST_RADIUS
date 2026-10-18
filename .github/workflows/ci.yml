@@ -41,6 +41,9 @@ jobs:
           assert 'blastradius/node/worker.mjs' in names
           assert 'blastradius/node/package-lock.json' in names
           assert 'blastradius/migrations/001_initial.sql' in names
+          assert 'blastradius/static/index.html' in names
+          assert 'blastradius/static/app.js' in names
+          assert 'blastradius/static/styles.css' in names
           assert not any('node_modules' in name for name in names)
           subprocess.run([sys.executable, '-m', 'pip', 'install', '--force-reinstall', '--no-deps', str(wheel)], check=True)
           with tempfile.TemporaryDirectory() as directory:

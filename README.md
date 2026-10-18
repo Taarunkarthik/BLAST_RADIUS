@@ -29,13 +29,25 @@ source .venv/bin/activate
 Install the CLI and the pinned parser dependencies:
 
 ```sh
-python -m pip install -e ".[dev]"
+python -m pip install -e ".[dev,harness,postgres]"
 blastradius setup
 ```
 
 `setup` is the explicit installation step that contacts npm. It uses the checked-in lockfile and disables install scripts. Ordinary scans never install packages, fetch URLs, run project code, or change target files. `scan --save` explicitly connects to the configured PostgreSQL store.
 
 For a built wheel, install it with `pip install path/to/blastradius-0.1.0-py3-none-any.whl`, then run `blastradius setup` in that Python environment.
+
+For a minimal CLI installation, use `pip install -e .`; the database and browser dependencies are optional.
+
+## Open the local browser interface
+
+```sh
+blastradius harness --path examples/demo
+```
+
+Open the printed local address, normally [localhost:8765](http://127.0.0.1:8765), and choose **Run scan**. The interface includes searchable findings, severity filters, dependency paths, coverage details, and JSON export. Use `--path /path/to/repository` for your own project. Saved history and comparison use the optional PostgreSQL configuration.
+
+See [the harness guide](docs/harness.md) and [saved scans and comparison](docs/persistence.md).
 
 ## Scan
 
@@ -127,7 +139,7 @@ Read [the implementation phases and status](docs/PHASES.md), [the implementation
 
 This is a static diagnostic MVP. It does not run a type checker, compile Sass, validate CSS property values, execute bundler configuration, or prove runtime behavior. Computed JS imports and custom bundler resolvers may leave partial coverage. Sass package load paths and interpolation are not resolved. Remote links are not requested; HTML/Markdown anchor fragments are not validated. JSON references use filesystem-relative paths; nested JSON Schema `$id` rebasing is not implemented.
 
-PostgreSQL persistence and saved-scan comparison are available through the optional `postgres` extra. See [saved scans and comparison](docs/persistence.md) for registration, migrations, and commands. A browser harness is the remaining optional milestone. Python, Go, and Rust files appear as unsupported, as specified for the MVP.
+All seven implementation phases are delivered, including the optional PostgreSQL store and FastAPI browser harness. Python, Go, and Rust files appear as unsupported, as specified for the MVP. The remaining coverage extensions are listed explicitly in [the phases document](docs/PHASES.md).
 
 ## Development
 
@@ -136,6 +148,8 @@ ruff check src tests scripts
 pytest -q
 python -m build
 python scripts/benchmark.py --files 1000
+python scripts/accuracy.py
+python scripts/scale_benchmark.py
 ```
 
-CI runs on Linux and Windows with Python 3.11, 3.12, and 3.13. It checks lint, tests, a scan of this repository, wheel contents, and a clean wheel installation. The benchmark creates a temporary 1,000-file repository with 999 dependents of a broken module; timings depend on the host and are not a flaky CI gate.
+CI runs on Linux, Windows, and macOS with Python 3.11, 3.12, and 3.13. A separate PostgreSQL 17 job verifies real database transactions and CLI/browser API workflows. CI checks lint, tests, accuracy fixtures, a scan of this repository, wheel contents, and a clean wheel installation. See [validation results and their limits](docs/validation.md). Benchmarks use temporary repositories; timings depend on the host and are not a CI timing gate.
