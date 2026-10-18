@@ -1,4 +1,7 @@
 import json
+import os
+import subprocess
+import sys
 
 from typer.testing import CliRunner
 
@@ -50,4 +53,16 @@ def test_root_failure_is_visible_in_text(repository):
     result = runner.invoke(app, ["scan", "--path", str(root), "--deterministic-id"])
     assert result.exit_code == 1
     assert "CRITICAL - root node" in result.stdout
+
+
+def test_deterministic_output_across_processes_and_hash_seeds(repository):
+    root = repository({"broken.ts": "const = ; function () { const x = ;"})
+    command = [sys.executable, "-m", "blastradius", "scan", "--path", str(root), "--format", "json", "--deterministic-id"]
+    outputs = []
+    for seed in ("1", "2"):
+        completed = subprocess.run(command, capture_output=True, env={**os.environ, "PYTHONHASHSEED": seed}, check=False)
+        assert completed.returncode == 1
+        outputs.append(completed.stdout)
+    assert len(json.loads(outputs[0])["issues"]) > 1
+    assert outputs[0] == outputs[1]
 

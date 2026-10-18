@@ -29,7 +29,7 @@ class Issue:
         return asdict(self)
 
     def sort_key(self):
-        return (SEVERITY_ORDER[self.severity], self.file, self.line, self.type, self.target)
+        return (SEVERITY_ORDER[self.severity], self.file, self.line, self.type, self.target, self.message)
 
 
 def is_declaration(file: str) -> bool:

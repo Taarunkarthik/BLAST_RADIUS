@@ -1,6 +1,7 @@
 """Deterministic discovery with nested Git-style ignores and no symlink traversal."""
 
 import os
+import stat
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -61,7 +62,8 @@ def discover(root: Path) -> list[DiscoveredFile]:
                     ignored = result.include
             if ignored:
                 continue
-            if entry.is_symlink() or (is_dir and hasattr(path, "is_junction") and path.is_junction()):
+            junction = is_dir and getattr(entry.stat(follow_symlinks=False), "st_reparse_tag", 0) == getattr(stat, "IO_REPARSE_TAG_MOUNT_POINT", 0xA0000003)
+            if entry.is_symlink() or junction:
                 files.append(DiscoveredFile(rel, route(rel), "symbolic link or junction"))
             elif is_dir:
                 walk(path, rules)

@@ -1,3 +1,6 @@
+import os
+import subprocess
+
 import pytest
 
 from blastradius.discovery import discover
@@ -34,4 +37,19 @@ def test_symlinks_are_not_followed(repository, tmp_path):
     files = discover(root)
     assert len(files) == 2
     assert next(item for item in files if item.path == "loop").skip_reason
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows junction behavior")
+def test_directory_junctions_are_not_followed(repository):
+    root = repository({"real/main.ts": ""})
+    result = subprocess.run(["cmd", "/c", "mklink", "/J", str(root / "loop"), str(root)], capture_output=True, check=False)
+    if result.returncode:
+        pytest.skip("Host does not allow creating directory junctions")
+    try:
+        files = discover(root)
+        assert len(files) == 2
+        assert next(item for item in files if item.path == "loop").skip_reason
+    finally:
+        # rmdir removes only the junction itself, never the target directory.
+        (root / "loop").rmdir()
 
