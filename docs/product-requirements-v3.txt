@@ -1,0 +1,237 @@
+BLASTRADIUS — PRODUCT REQUIREMENTS DOCUMENT (PRD)
+Version: 3.0 | October 2026
+Supersedes: 2.1
+Target: A unified repository health scanner that identifies broken files and shows structural impact via a dependency tree.
+
+CHANGELOG (2.1 -> 3.0)
+- Complete architectural shift from a pure structural analyzer to a unified repo health scanner.
+- Added a File-Type Router and independent per-file checkers for CSS, JSON, YAML, HTML, and Markdown.
+- Introduced "Tree Impact" view: correlating broken JS/TS files with the dependency graph.
+- Removed all "fix summary" and "suggestion" logic. The tool reports what is broken and how it impacts the tree, but intentionally does not prescribe or apply fixes.
+- Scope expanded from JS/TS only to "Every file type" (Tier 1 checkers).
+
+1. EXECUTIVE SUMMARY
+BlastRadius is a local-first CLI that answers two questions: "What's broken in my repo?" and "If this breaks, how far does the damage spread?" It walks a repository, routes files to language-specific checkers, builds a dependency graph for JS/TS, and merges the results into a single, honest output. It flags per-file issues, calculates the blast radius for structural failures, and explicitly notes when an error is local and does not propagate. It never applies fixes or generates fix suggestions.
+
+2. PROBLEM STATEMENT
+Developers currently use disconnected tools to understand repo health: ESLint for JS/TS, Stylelint for CSS, jsonlint for configs, and separate graph tools to trace dependencies. None of these tools answer both "What is broken?" and "What depends on it?" in one pass. Furthermore, AI tools can explain code but cannot deterministically calculate reverse dependency trees. BlastRadius bridges this gap.
+
+3. GOALS
+- Read every file in the directory, routing it to the appropriate checker.
+- Flag broken files (syntax errors, missing imports, unresolved assets).
+- Build a directed dependency graph for JS/TS files.
+- Calculate the "Tree Impact" (blast radius) for structural JS/TS breaks.
+- Explicitly report files that were not checked to maintain honesty about coverage.
+- Provide a clean, deterministic output that shows what is broken without prescribing fixes.
+- Remain read-only and local-first.
+
+4. USERS
+Primary: Developers and maintainers auditing repository health.
+Secondary: Tech leads assessing structural risk before refactoring.
+Tertiary: CI/CD pipelines acting on deterministic exit codes.
+
+5. MVP SCOPE
+
+Required (MVP):
+- CLI scanning and File-Type Router.
+- Tier 1 Checkers: JS/TS, CSS/SCSS, JSON, YAML, HTML, Markdown.
+- Dependency graph construction and BFS/DFS reverse traversal (for JS/TS).
+- "Tree Impact" output for JS/TS issues (showing direct/transitive dependents and paths).
+- Explicit "No Tree Impact" notes for non-graph files (CSS, JSON, etc.).
+- "Not checked" reporting for unsupported file types.
+- Global `--format {text,json}` and deterministic exit codes.
+
+Explicitly OUT of Scope:
+- Fix suggestions. (Removed in v3.0)
+- Auto-fixing or applying patches.
+- Full React dashboard (CLI harness remains optional).
+- Python, Go, Rust checkers (Phase 2).
+
+6. TECH STACK
+CLI: Python, Typer, Rich
+JS/TS parser & resolver: TypeScript-aware Node.js module (persistent subprocess, NDJSON protocol v1).
+CSS/Config parsers: Standard Python parsers (e.g., `json`, `PyYAML`, `tinycss2`).
+Graph engine: Python adjacency lists, BFS, DFS.
+Database (Optional): PostgreSQL (for `--save` and `compare`).
+Harness (Optional): FastAPI + static HTML page.
+
+7. SYSTEM ARCHITECTURE
+
+Primary Flow:
+Repository -> File Walker -> File-Type Router
+  ├─► JS/TS Resolver -> Graph Engine -> Tree Impact Calculator
+  └─► Config/Asset Checkers -> Local Issue List
+  │
+  ▼
+Output Merger (Combines Issues + Tree Impact + Not-Checked) -> CLI Output
+
+Key Invariants:
+- The Graph Engine and the File Checkers run independently.
+- The output merger correlates their results but never mutates the underlying graph or issue data.
+- Non-JS/TS issues do not generate tree impact (they are explicitly marked as local).
+
+8. CLI COMMANDS
+
+  blastradius scan [--path PATH]       Scan directory, output merged report.
+  blastradius scan --mode=structure    Run only graph/impact analysis (skip CSS/JSON checkers).
+  blastradius scan --mode=health       Run only file checkers (skip graph).
+  blastradius scan --save              Persist results to DB (requires project match).
+  blastradius compare ID1 ID2          Compare two saved scans (base -> head).
+  blastradius harness                  Start local web harness.
+
+Global Flags:
+  --format {text,json}                 Output format.
+  --deterministic-id                   Byte-identical output for CI.
+  --fail-on {none,low,medium,high}     Exit code threshold.
+  --logs                               Show detailed per-file output.
+
+9. FUNCTIONAL REQUIREMENTS
+
+FR-01 Repository Discovery & Routing
+Walk the directory. Apply ignore rules (built-in, `.gitignore`, `.repohealthignore`).
+Route files by extension:
+  - `.js .jsx .ts .tsx .mjs .cjs` -> JS/TS Checker + Graph.
+  - `.css .scss` -> CSS Checker.
+  - `.json` -> JSON Checker.
+  - `.yaml .yml` -> YAML Checker.
+  - `.html` -> HTML Checker.
+  - `.md` -> Markdown Checker.
+  - Unknown types -> "Not Checked" report.
+
+FR-02 JS/TS Resolution & Graph Construction
+Parse imports, resolve targets, build directed graph (Node types: file, package, unresolved). Apply Appendix E edge cases (ignore `.css` imports, built-ins, `@types`, etc.).
+Node key: `<kind>:<normalized-path>`.
+
+FR-03 Issue Detection
+Issue taxonomy is closed (no fix categories, no suggestions).
+  - JS/TS: `undeclared_external_package`, `missing_local_module`, `declared_but_not_installed`, `invalid_path`, `unsupported_resolution`, `parse_error`.
+  - CSS: `invalid_css`, `missing_css_import`.
+  - JSON: `invalid_json`, `broken_json_ref`.
+  - YAML: `invalid_yaml`, `tabs_in_yaml`.
+  - HTML: `missing_asset`.
+  - Markdown: `broken_link`.
+  - Global: `version_mismatch`.
+Each issue records: file, line, type, severity, target.
+
+FR-04 Tree Impact Analysis (JS/TS Only)
+For every JS/TS issue, traverse the reverse graph from the failing component:
+  - Calculate `affected_count`, `eligible_count`, and `impact_percentage`.
+  - Capture `direct_dependents` and `transitive_dependents`.
+  - Reconstruct the exact dependency `paths` (e.g., `Chart.tsx -> Dashboard.tsx -> App.tsx`).
+  - If the failed node is a root (0 dependents), mark as `CRITICAL — root node`.
+
+FR-05 Non-Graph Issue Handling
+For CSS, JSON, YAML, HTML, and Markdown issues:
+  - Do not run graph traversal.
+  - Explicitly tag the issue with `has_tree_impact: false`.
+  - Output a note explaining why (e.g., "CSS is not imported by JS" or "Config files are not in the dependency graph").
+
+FR-06 Output Merging
+Combine FR-03 (issues) and FR-04/05 (tree impact) into a single text/JSON view.
+List issues grouped by severity (High, Medium, Low).
+For each issue, append its Tree Impact diagram (if applicable) or the "No Tree Impact" note.
+
+FR-07 Persistence
+Save projects, scans, components, dependencies, issues, and top-N impact results.
+Do not save suggestions (they no longer exist).
+Save `has_tree_impact` boolean per issue.
+
+FR-08 Not Checked Reporting
+Always list the count and file extensions of files that were skipped due to lack of a configured checker.
+
+10. GRAPH ALGORITHMS
+Directed graph G=(V,E). Edge A -> B means A imports B.
+To simulate B failing: build reverse adjacency, BFS/DFS from B.
+Visited set prevents cycles.
+Blast radius = unique reachable dependents.
+Complexity: O(V+E).
+
+11. DATABASE DESIGN (OPTIONAL)
+(Unchanged from v2.1, except `issues` table drops `suggestion` and `fix_category`, and adds `has_tree_impact` boolean.)
+
+12. CLI OUTPUT FORMAT (TEXT)
+
+RepoHealth Scan — ./my-app
+Files checked: 355 / 365 (10 not checked: .png, .svg)
+
+━━━ BROKEN (12 issues) ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  HIGH (4)
+  ├─ src/Chart.tsx:3          undeclared_external_package  chart-helper
+  ├─ src/App.tsx:12           missing_local_module         ./missing
+
+  MEDIUM (5)
+  ├─ src/styles/main.css:42   invalid_css
+  └─ config/app.json:18       invalid_json
+
+━━━ TREE IMPACT (how each break propagates) ━━━━━━━━━━━━━━━━━
+
+▸ src/Chart.tsx:3  (undeclared_external_package: chart-helper)
+  Impact: HIGH — 3 affected / 180 eligible files (1.7%)
+
+  src/Chart.tsx
+  ├─◄ src/Dashboard.tsx        (direct)
+  │   └─◄ src/App.tsx          (transitive, distance 2)
+  └─◄ src/layouts/Grid.tsx     (direct)
+
+▸ src/App.tsx:12  (missing_local_module: ./missing)
+  Impact: CRITICAL — 0 dependents (App is root)
+  Note: App.tsx is the entry point; nothing depends on it.
+
+▸ src/styles/main.css:42  (invalid_css)
+  Impact: LOW — no tree impact
+  Note: CSS is not imported by JS.
+
+No fixes were applied.
+
+13. JSON OUTPUT FORMAT
+
+{
+  "scan": { "files_checked": 355, "not_checked_types": [".png"] },
+  "issues": [
+    {
+      "file": "src/Chart.tsx", "line": 3, "type": "undeclared_external_package",
+      "impact": {
+        "has_tree_impact": true, "affected_count": 3,
+        "direct_dependents": ["src/Dashboard.tsx"],
+        "transitive_dependents": ["src/App.tsx"]
+      }
+    },
+    {
+      "file": "src/styles/main.css", "line": 42, "type": "invalid_css",
+      "impact": { "has_tree_impact": false, "note": "CSS is not imported by JS" }
+    }
+  ]
+}
+
+14. NON-FUNCTIONAL REQUIREMENTS
+- Performance: < 5s for 1,000 files. Partial-scan semantics apply (>5k files).
+- Determinism: `--deterministic-id` guarantees byte-identical reports.
+- Safety: Read-only. No code execution. No network calls. No fix application.
+- Reliability: Works offline. Explicitly reports "not checked" files.
+
+15. ROADMAP (6-7 Weeks)
+Week 1: CLI, File Walker, Router, NDJSON subprocess boundary.
+Week 2: JS/TS Resolver & Graph Engine.
+Week 3: Tree Impact Calculator & Output Merger.
+Week 4: Tier 1 Checkers (CSS, JSON, YAML, HTML, MD).
+Week 5: DB, `--save`, `compare`, JSON formatting.
+Week 6: Tests, accuracy targets, docs, demo.
+Week 7: (Optional) CLI Harness.
+
+16. TESTING AND ACCEPTANCE CRITERIA
+- Valid imports produce graph edges. Missing imports produce issues + tree impact.
+- CSS/JSON/YAML errors produce issues tagged `has_tree_impact: false`.
+- Output explicitly lists files not checked.
+- `--mode=health` skips graph creation; `--mode=structure` skips config checkers.
+- No fix suggestions are generated anywhere in the codebase.
+- Root node failures are correctly marked (0 dependents).
+
+17. DEFINITION OF DONE
+A developer runs `blastradius scan`, sees every broken file in their repo, sees exactly how the JS/TS breaks propagate through the dependency tree, sees which files were skipped, and receives zero unsolicited fix suggestions.
+
+APPENDIX A: RESOLUTION EDGE CASES
+(From v2.1, unchanged. Non-source imports are ignored and do not break the graph, but the Tree Impact will show 0 structural reach for them).
+
+APPENDIX B: DECISION RECORD
+D1-D19 (From v2.1, unchanged).
+D20 (New): Fix summaries and suggestions are permanently removed. The tool is a diagnostic scanner, not a fixer.

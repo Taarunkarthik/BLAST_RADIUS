@@ -1,0 +1,24 @@
+# MVP implementation decisions
+
+The supplied v3.0 PRD is the product reference. It refers to missing v2.1 appendices (and to an Appendix E that is not included). These explicit decisions make the first implementation reviewable.
+
+- Implement the required CLI MVP first. PostgreSQL persistence, saved-scan comparison, and the optional browser harness remain later milestones.
+- A graph edge A -> B means A imports B. An issue propagates from the source file containing the issue. Eligible files are successfully parsed/scanned JS/TS source files, excluding declaration files. Affected counts exclude the failing file itself.
+- Report one deterministic shortest dependency path per affected file. Enumerating every path through a cyclic graph is unbounded. The full graph preserves all edges.
+- A file with no reverse dependents is labeled `CRITICAL — root node` as required. This is a graph property, not evidence that the file is a runtime entry point.
+- Default failure threshold is high. Exit codes: 0 below threshold, 1 findings at/above threshold, 2 invocation/runtime failure, 3 incomplete scan. Incompleteness takes precedence over finding thresholds.
+- Always report unsupported files separately from files excluded by mode, size limits, symbolic links, or scan limits. Ignored paths are outside coverage. A limited scan labels impact as partial.
+- Ignore non-source JS/TS imports, Node built-ins, and declaration files as graph vertices. Diagnose non-literal dynamic imports as unsupported resolution. Never execute project code, configuration, install scripts, or network requests during scans.
+- Use the nearest package manifest for package declarations and the nearest tsconfig/jsconfig for TypeScript resolution. Read JSON configuration only. Respect TypeScript path mappings and package exports; unsupported resolution is reported rather than guessed.
+- CSS and SCSS use PostCSS parsers in the same persistent Node worker. This recognizes SCSS syntax without compiling Sass or executing plugins. Other local checks use Python parsers.
+- JSON references validate local files and JSON Pointer fragments. Network references are excluded from local validation. HTML/Markdown validate local file targets; remote URLs and anchor-only links are not fetched or checked. Root-relative links resolve against the scan root.
+- Non-JS issues always say that their file type is outside the JS/TS dependency graph, even when an application imports that asset. A zero structural radius does not claim zero runtime impact.
+- Deterministic mode omits timestamps and absolute root paths, sorts output, and derives the scan ID from report content and checked file hashes.
+
+## Parser references
+
+- [TypeScript Compiler API](https://github.com/microsoft/TypeScript/wiki/Using-the-Compiler-API)
+- [TypeScript configuration](https://www.typescriptlang.org/tsconfig/)
+- [PostCSS SCSS parser](https://github.com/postcss/postcss-scss)
+- [PathSpec API](https://python-path-specification.readthedocs.io/en/latest/api.html)
+

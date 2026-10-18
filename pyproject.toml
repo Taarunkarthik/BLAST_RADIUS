@@ -1,0 +1,39 @@
+[build-system]
+requires = ["hatchling>=1.27,<2"]
+build-backend = "hatchling.build"
+
+[project]
+name = "blastradius"
+version = "0.1.0"
+description = "Local repository health checks with JavaScript and TypeScript dependency impact"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "typer>=0.16,<1",
+  "rich>=14,<15",
+  "pathspec>=0.12,<2",
+  "PyYAML>=6.0.2,<7",
+  "markdown-it-py>=3,<5",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8,<10", "ruff>=0.11,<1", "build>=1.2,<2"]
+
+[project.scripts]
+blastradius = "blastradius.cli:app"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/blastradius"]
+exclude = ["node_modules", "__pycache__"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+ignore = ["E501", "B008"]
+
