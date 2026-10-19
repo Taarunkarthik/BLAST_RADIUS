@@ -68,8 +68,13 @@ async def test_static_modules_are_served(client, path):
     response = await client.get(path)
     assert response.status_code == 200, path
     assert response.headers["cache-control"] == "no-store"
-    expected = "text/css" if path.endswith(".css") else "text/javascript"
-    assert response.headers["content-type"].startswith(expected)
+    content_type = response.headers["content-type"].split(";", 1)[0]
+    if path.endswith(".css"):
+        assert content_type == "text/css"
+    else:
+        # Windows' MIME registry reports application/javascript; both are valid
+        # JavaScript types, so accept either across platforms.
+        assert content_type in {"text/javascript", "application/javascript"}
 
 
 async def test_static_serving_rejects_escapes_and_missing_files(client):
