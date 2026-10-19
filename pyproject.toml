@@ -78,6 +78,9 @@ exclude = ["node_modules", "__pycache__"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# Put the repo root on sys.path so tests can import helpers from scripts/.
+# CI runs the `pytest` console script, which does not add the CWD.
+pythonpath = ["."]
 
 [tool.ruff]
 line-length = 100
