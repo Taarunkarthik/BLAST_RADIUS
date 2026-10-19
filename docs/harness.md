@@ -10,7 +10,11 @@ blastradius setup
 blastradius harness --path /path/to/repository --port 8765
 ```
 
-Open the address printed by the command, normally [http://127.0.0.1:8765](http://127.0.0.1:8765). Keep the terminal running; Ctrl+C stops the server. The repository's `examples/demo` directory is a useful first scan: it contains five intentional findings and a Chart module with three dependent files.
+Open the address printed by the command, normally [http://127.0.0.1:8765](http://127.0.0.1:8765). Keep the terminal running; Ctrl+C stops the server. The repository's `examples/demo` directory is a useful first scan: **10 / 10 files checked, 0 unsupported**, including its valid SVG, with five intentional findings and a Chart module with three dependent files.
+
+![Demo report with ten checked files and zero unsupported files](assets/harness.png)
+
+Regenerate this screenshot from the real local harness with `python -m playwright install chromium` followed by `python scripts/ui_capture.py` (requires the `dev,harness` extras). The script starts and stops its own loopback server, verifies the demo counts and coverage in Chromium, and writes `docs/assets/harness.png`.
 
 ## Inspect a scan
 

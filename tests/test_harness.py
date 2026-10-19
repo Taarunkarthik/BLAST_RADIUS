@@ -34,7 +34,8 @@ def test_scan_and_report_are_read_only(client, tmp_path):
     assert response.status_code == 200, response.text
     report = response.json()
     assert report["issues"][0]["type"] == "missing_local_module"
-    assert report["scan"]["not_checked_types"] == [".svg"]
+    assert report["scan"]["not_checked_types"] == []
+    assert report["scan"]["files_checked"] == 2
     assert client.get("/api/report").json() == report
     assert snapshot() == before
 

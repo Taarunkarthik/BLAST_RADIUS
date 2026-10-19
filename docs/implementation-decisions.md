@@ -17,6 +17,11 @@ The supplied v3.0 PRD is the product reference. It refers to missing v2.1 append
 - Use TypeScript syntactic diagnostics for JavaScript grammar and symbol declarations to distinguish global CommonJS `require` from locally shadowed identifiers. This does not enable semantic type checking.
 - The missing database appendix is replaced by the documented [persistence design](persistence.md): immutable full reports plus normalized records, project-scoped saved IDs, transactional migrations, and top-20 impact rows. Compare conservatively when head coverage cannot establish that a finding was resolved.
 - The [browser harness](harness.md) binds only to loopback and scopes scans to its startup directory. It reuses the scanner and report contract, with static HTML/CSS/JavaScript instead of a separate React application. Saving and comparison remain explicit database actions.
+- Tier 1 adds medium-severity `invalid_toml`, `invalid_ini`, `invalid_svg`, `invalid_python`, and `invalid_dotenv` diagnostics. Use stdlib parsers only. SVG coverage is XML syntax only; local SVG references are not added in this increment. Python uses `ast.parse` under the running interpreter, never imports or executes the scanned module. Dotenv accepts blank/comment lines, export declarations, and identifier-style `KEY=value` lines; it does not parse multiline values or echo values in diagnostics.
+- Tier 2 adds `invalid_shell`, `invalid_sql`, and `invalid_mako`. SQLGlot and Mako belong only to the `languages` extra; absent dependencies remain unsupported. SQLGlot uses its generic syntax superset and is not a dialect-specific database validator. Mako uses `Lexer.parse()`, never `Template()` or rendering, so module-level Python remains inert.
+- Optional parsers must resolve to their installed distribution. Project files named `sqlglot.py` or `mako.py` are not imported as parsers; shadowed optional parsers remain unsupported. Regression tests verify that these project files are not executed.
+- Shell syntax uses the already bounded file content over stdin to `bash --noprofile --norc -n`, with startup hooks and inherited shell functions removed from the environment. An absent/unusable Bash is unsupported, including Windows' legacy WSL launcher. A ten-second timeout produces incomplete coverage, not a fabricated syntax finding. No scanned script is executed.
+- All new checkers obey the existing file/byte limits, ignores, structure-mode exclusions, and No Tree Impact behavior. `.env` and `.example` basenames are explicitly recognized despite their leading dots. `.lock`, `.png`, `.template`, `.vercel`, and other extensionless names stay unsupported. No broken files are added to the demo.
 
 ## Parser references
 
@@ -24,4 +29,5 @@ The supplied v3.0 PRD is the product reference. It refers to missing v2.1 append
 - [TypeScript configuration](https://www.typescriptlang.org/tsconfig/)
 - [PostCSS SCSS parser](https://github.com/postcss/postcss-scss)
 - [PathSpec API](https://python-path-specification.readthedocs.io/en/latest/api.html)
+- [SQLGlot parser behavior and limits](https://sqlglot.com/sqlglot.html)
 

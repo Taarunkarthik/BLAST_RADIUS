@@ -1,6 +1,7 @@
 # BlastRadius implementation phases
 
-Status date: 18 October 2026  
+Status date: 19 October 2026
+
 Delivery branch: `codex/initial-mvp`
 
 All seven implementation phases from section 15 of the [v3.0 PRD](product-requirements-v3.txt) are implemented, including the optional persistence and browser milestones. Week numbers below are the original planning sequence, not elapsed delivery time. Validation evidence and its boundaries are recorded in [validation.md](validation.md).
@@ -85,7 +86,7 @@ All seven implementation phases from section 15 of the [v3.0 PRD](product-requir
 - [x] Wheel/source builds, bundled SQL/static assets, clean wheel install checks.
 - [x] Installation, persistence, harness, contract, validation docs and broken demo.
 
-**Acceptance:** known regressions are closed, measurements are reproducible, and claims stay within the tested corpus and hosts. The current local suite has 84 passes and six database skips; database tests execute in CI. Performance and accuracy figures are detailed in [validation.md](validation.md).
+**Acceptance:** known regressions are closed, measurements are reproducible, and claims stay within the tested corpus and hosts. Database integration tests execute in CI. Current local results, performance, and accuracy figures are detailed in [validation.md](validation.md).
 
 ## Phase 7 — Local web harness
 
@@ -106,7 +107,7 @@ All seven implementation phases from section 15 of the [v3.0 PRD](product-requir
 - Sass interpolation and custom package load paths.
 - Nested JSON Schema `$id` rebasing.
 - Broader real-repository accuracy sampling and performance profiling.
-- Python, Go, and Rust checkers, described separately as later language expansion in the PRD.
+- Python dependency analysis and Go/Rust checkers. Python syntax checking, TOML/INI/SVG/dotenv checks, and optional Bash/SQL/Mako syntax checks have since been added as a file-health extension; they do not add new dependency graphs.
 
 Full type checking, CSS property/value semantics, runtime execution, automatic fixes, and fix suggestions remain excluded from this diagnostic MVP.
 

@@ -19,7 +19,8 @@ dependencies = [
 [project.optional-dependencies]
 postgres = ["psycopg[binary]>=3.2,<4"]
 harness = ["fastapi>=0.115,<1", "uvicorn>=0.34,<1"]
-dev = ["pytest>=8,<10", "ruff>=0.11,<1", "build>=1.2,<2", "httpx>=0.28,<1"]
+languages = ["sqlglot>=25", "mako>=1.3"]
+dev = ["pytest>=8,<10", "ruff>=0.11,<1", "build>=1.2,<2", "httpx>=0.28,<1", "mypy>=1.15,<2", "types-PyYAML>=6", "playwright>=1.50,<2"]
 
 [project.scripts]
 blastradius = "blastradius.cli:app"

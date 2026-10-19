@@ -1,15 +1,170 @@
-"""Local-only JSON, YAML, HTML, Markdown and stylesheet-reference checks."""
+"""Read-only syntax and local-reference checks; scanned code is never executed."""
 
+import ast
+import configparser
+import importlib
+import importlib.util
 import json
+import os
 import re
+import shutil
+import subprocess
+import tomllib
+import xml.etree.ElementTree as ET
 from html.parser import HTMLParser
+from importlib.metadata import distribution
 from pathlib import Path
+from types import ModuleType
+from typing import cast
 from urllib.parse import unquote, urljoin, urlsplit
 
 import yaml
 from markdown_it import MarkdownIt
 
 from blastradius.models import Issue
+
+
+class CheckerUnavailable(RuntimeError):
+    """An optional parser cannot run; its files remain unsupported."""
+
+
+def optional_parser(name: str) -> ModuleType | None:
+    try:
+        package = name.split(".", 1)[0]
+        # Do not import a scanned sqlglot.py/mako.py that shadows the installed
+        # dependency on sys.path. Looking up a top-level spec does not execute it.
+        installed = Path(str(distribution(package).locate_file(package))).resolve()
+        spec = importlib.util.find_spec(package)
+        if spec is None or spec.origin is None or not Path(spec.origin).resolve().is_relative_to(installed):
+            return None
+        return importlib.import_module(name)
+    except (ImportError, OSError, ValueError):
+        return None
+
+
+def _error_line(message: str, content: str) -> int:
+    match = re.search(r"\bline[ :]+(\d+)", message, re.IGNORECASE)
+    if match:
+        return max(1, int(match[1]))
+    return content.count("\n") + 1 if "end of document" in message else 1
+
+
+def check_toml(file: str, content: str) -> list[Issue]:
+    try:
+        tomllib.loads(content)
+    except (tomllib.TOMLDecodeError, RecursionError) as error:
+        line = getattr(error, "lineno", None) or _error_line(str(error), content)
+        return [Issue(file, line, "invalid_toml", "medium", message=str(error))]
+    return []
+
+
+def check_ini(file: str, content: str) -> list[Issue]:
+    try:
+        # Values are inert; percent signs and interpolation-like strings are valid.
+        configparser.ConfigParser(interpolation=None).read_string(content, source=file)
+    except configparser.Error as error:
+        line = getattr(error, "lineno", None)
+        if line is None:
+            errors = getattr(error, "errors", [])
+            line = errors[0][0] if errors else 1
+        return [Issue(file, line, "invalid_ini", "medium", message=f"Invalid INI syntax ({type(error).__name__}).")]
+    return []
+
+
+def check_svg(file: str, content: str) -> list[Issue]:
+    try:
+        # ElementTree does not retrieve external entities or execute SVG scripts.
+        ET.fromstring(content)
+    except ET.ParseError as error:
+        return [Issue(file, error.position[0], "invalid_svg", "medium", message=str(error))]
+    return []
+
+
+def check_python(file: str, content: str) -> list[Issue]:
+    try:
+        ast.parse(content, filename=file)
+    except (SyntaxError, ValueError, RecursionError) as error:
+        return [Issue(file, getattr(error, "lineno", None) or 1, "invalid_python", "medium",
+                      message=getattr(error, "msg", None) or "Invalid or excessively nested Python syntax.")]
+    return []
+
+
+def check_dotenv(file: str, content: str) -> list[Issue]:
+    issues = []
+    for line, text in enumerate(content.splitlines(), 1):
+        text = text.strip()
+        if not text or text.startswith("#") or re.match(r"export(?:\s|$)", text):
+            continue
+        if not re.match(r"[A-Za-z_][A-Za-z0-9_]*\s*=", text):
+            # Never echo environment values in diagnostics.
+            issues.append(Issue(file, line, "invalid_dotenv", "medium", message="Expected KEY=value, an export declaration, or a comment."))
+    return issues
+
+
+def available_bash() -> str | None:
+    bash = shutil.which("bash")
+    # Windows' legacy WSL launcher is not a Bash executable: it can initialize a
+    # distro or hang instead of honoring Bash's no-execution/startup flags.
+    if bash and os.name == "nt" and Path(bash).parent.name.lower() in {"system32", "sysnative"}:
+        return None
+    return bash
+
+
+def check_shell(file: str, content: str) -> list[Issue]:
+    bash = available_bash()
+    if bash is None:
+        raise CheckerUnavailable("Bash is not installed.")
+    # A clean startup environment prevents BASH_ENV and exported shell functions
+    # from executing before -n. Feed only the already bounded text via stdin.
+    env = {key: os.environ[key] for key in ("PATH", "SYSTEMROOT", "WINDIR", "TEMP", "TMP") if key in os.environ}
+    env.update(LANG="C", LC_ALL="C")
+    try:
+        result = subprocess.run(
+            [bash, "--noprofile", "--norc", "-n"], input=content, text=True,
+            encoding="utf-8", errors="replace", capture_output=True, timeout=10,
+            env=env, check=False, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+    except subprocess.TimeoutExpired as error:
+        raise OSError("Shell syntax check exceeded its deadline.") from error
+    except OSError as error:
+        raise CheckerUnavailable("Bash could not be started.") from error
+    if result.returncode == 0:
+        return []
+    if result.returncode != 2 or not re.search(r"\bline[ :]+\d+", result.stderr):
+        # Windows may expose a WSL launcher named bash without a usable shell.
+        raise CheckerUnavailable("Bash is installed but unavailable.")
+    return [Issue(file, _error_line(result.stderr, content), "invalid_shell", "medium",
+                  message="Bash reported a shell syntax error.")]
+
+
+def check_sql(file: str, content: str) -> list[Issue]:
+    parser = optional_parser("sqlglot")
+    if parser is None:
+        raise CheckerUnavailable("Install the languages extra for SQL parsing.")
+    try:
+        # Default SQLGlot dialect is a broad syntax superset, not a database check.
+        parser.parse(content, error_level=parser.ErrorLevel.RAISE)
+    except parser.errors.ParseError as error:
+        return [Issue(file, detail.get("line") or 1, "invalid_sql", "medium",
+                      message=detail.get("description") or "Invalid SQL syntax.")
+                for detail in error.errors] or [Issue(file, 1, "invalid_sql", "medium", message="Invalid SQL syntax.")]
+    except (parser.errors.TokenError, RecursionError) as error:
+        return [Issue(file, _error_line(str(error), content), "invalid_sql", "medium", message="Invalid or excessively nested SQL syntax.")]
+    return []
+
+
+def check_mako(file: str, content: str) -> list[Issue]:
+    lexer = optional_parser("mako.lexer")
+    exceptions = optional_parser("mako.exceptions")
+    if lexer is None or exceptions is None:
+        raise CheckerUnavailable("Install the languages extra for Mako parsing.")
+    try:
+        # Lexer parses template/Python syntax only. Template() would compile and
+        # execute module-level Python, so it must never be used for scanning.
+        lexer.Lexer(content, filename=file).parse()
+    except (exceptions.SyntaxException, exceptions.CompileException, RecursionError) as error:
+        return [Issue(file, getattr(error, "lineno", None) or 1, "invalid_mako", "medium", message="Invalid Mako template syntax.")]
+    return []
 
 
 def local_target(root: Path, file: str, target: str) -> Path | None:
@@ -103,9 +258,10 @@ def check_json(root: Path, file: str, content: str) -> list[Issue]:
 
 def check_yaml(file: str, content: str) -> list[Issue]:
     issues = []
-    scalar_lines = set()
+    scalar_lines: set[int] = set()
     for number, line in enumerate(content.splitlines(), 1):
-        if "\t" in re.match(r"^[ \t]*", line)[0]:
+        prefix = re.match(r"^[ \t]*", line)
+        if prefix and "\t" in prefix[0]:
             issues.append(Issue(file, number, "tabs_in_yaml", "medium", message="Tab character in YAML indentation."))
     try:
         # Compose nodes rather than constructing Python objects: custom tags stay inert,
@@ -125,10 +281,10 @@ def check_yaml(file: str, content: str) -> list[Issue]:
                 pending.extend(node.value)
     except (yaml.YAMLError, RecursionError) as error:
         mark = getattr(error, "problem_mark", None)
-        line = mark.line + 1 if mark else 1
-        if not any(item.type == "tabs_in_yaml" and item.line == line for item in issues):
+        error_line = mark.line + 1 if mark else 1
+        if not any(item.type == "tabs_in_yaml" and item.line == error_line for item in issues):
             message = getattr(error, "problem", None) or "Invalid or excessively nested YAML."
-            issues.append(Issue(file, line, "invalid_yaml", "medium", message=message))
+            issues.append(Issue(file, error_line, "invalid_yaml", "medium", message=message))
     return [issue for issue in issues if not (issue.type == "tabs_in_yaml" and issue.line in scalar_lines)]
 
 
@@ -194,7 +350,7 @@ def check_markdown(root: Path, file: str, content: str) -> list[Issue]:
         if token.type != "inline":
             continue
         for child in token.children or []:
-            target = child.attrGet("href") if child.type == "link_open" else child.attrGet("src") if child.type == "image" else None
+            target = cast(str | None, child.attrGet("href") if child.type == "link_open" else child.attrGet("src") if child.type == "image" else None)
             if target and missing_target(root, file, target):
                 issues.append(Issue(file, line, "broken_link", "low", target, "Local link or image does not exist."))
             if child.type == "html_inline":

@@ -82,7 +82,7 @@ src/Chart.tsx
 └── src/Grid.tsx (direct)
 ```
 
-The same report includes a missing CSS import, JSON reference, HTML asset, Markdown link, and an unchecked SVG. The demo is excluded when scanning the project itself.
+The same report includes a missing CSS import, JSON reference, HTML asset, and Markdown link. Its valid SVG is also checked: **10 / 10 files checked, 0 unsupported**, with the same five findings. The demo is excluded when scanning the project itself.
 
 ## Checks and coverage
 
@@ -95,6 +95,18 @@ The same report includes a missing CSS import, JSON reference, HTML asset, Markd
 | YAML/YML | Syntax, indentation tabs; multiple documents and custom tags supported |
 | HTML | Local asset and page targets, `srcset`, `<base>` |
 | Markdown | Local links, images, reference links, and embedded HTML; code examples are excluded |
+| TOML | Syntax via Python's `tomllib` |
+| INI | Section/key syntax via `configparser`, with interpolation disabled |
+| SVG | XML syntax and error lines via ElementTree; scripts and references are not executed or fetched |
+| Python | Syntax only via `ast.parse`; no imports, execution, or dependency graph |
+| `.env`, `.example`, `*.env`, `*.example` | Basic line format: blank/comment, export declaration, or `KEY=value` |
+| Shell (`.sh`, optional) | `bash -n` on bounded stdin when a usable Bash is on PATH; no script execution |
+| SQL (`.sql`, optional) | SQLGlot parser diagnostics in its generic dialect; no database access |
+| Mako (`.mako`, optional) | Lexer/parser syntax checks; never compile/render a template or execute its Python |
+
+All these additional findings have **medium** severity and **No Tree Impact**. Install the optional SQL/Mako parsers with `python -m pip install -e ".[languages]"`; they are not core dependencies. Missing optional parsers leave their file types unsupported, without findings. Shell checks need an actual Bash executable on PATH; Windows' legacy WSL launcher is not accepted as Bash. Unavailable shells stay unsupported, while a running check that times out is disclosed as incomplete coverage.
+
+These are syntax checks, not proof that a program, query, or template is correct. Python syntax follows the scanner's interpreter version. SQLGlot accepts a broad syntax superset and may accept statements a particular database would reject. Dotenv checks are deliberately line-based and do not parse multiline quoted values. Existing ignore rules still apply to `.env` files. `.lock`, `.png`, `.template`, `.vercel`, and extensionless files remain unsupported.
 
 Each issue has a file, line, closed-taxonomy type, severity, target, and impact record. High findings include broken JS/TS syntax/imports. Local configuration/assets are medium; Markdown links are low. An issue retains its severity when the separate graph status says `CRITICAL - root node`.
 
@@ -126,7 +138,7 @@ Edges point from importer to dependency. A broken source file propagates through
 ```text
 Python CLI -> deterministic walker -> file router
                                    |-- TypeScript / PostCSS worker (NDJSON v1)
-                                   |-- Python JSON / YAML / HTML / Markdown checks
+                                   |-- Python file-health and optional language checks
                                    |-- independent dependency graph
                                    `-- report merger -> Rich text / stable JSON
 ```
@@ -139,12 +151,14 @@ Read [the implementation phases and status](docs/PHASES.md), [the implementation
 
 This is a static diagnostic MVP. It does not run a type checker, compile Sass, validate CSS property values, execute bundler configuration, or prove runtime behavior. Computed JS imports and custom bundler resolvers may leave partial coverage. Sass package load paths and interpolation are not resolved. Remote links are not requested; HTML/Markdown anchor fragments are not validated. JSON references use filesystem-relative paths; nested JSON Schema `$id` rebasing is not implemented.
 
-All seven implementation phases are delivered, including the optional PostgreSQL store and FastAPI browser harness. Python, Go, and Rust files appear as unsupported, as specified for the MVP. The remaining coverage extensions are listed explicitly in [the phases document](docs/PHASES.md).
+All seven implementation phases are delivered, including the optional PostgreSQL store and FastAPI browser harness. Python now has syntax checks; Python dependency analysis and Go/Rust checks remain future scope. The remaining coverage extensions are listed explicitly in [the phases document](docs/PHASES.md).
 
 ## Development
 
 ```sh
 ruff check src tests scripts
+python -m mypy src
+python -m mypy src --platform linux
 pytest -q
 python -m build
 python scripts/benchmark.py --files 1000
@@ -152,4 +166,4 @@ python scripts/accuracy.py
 python scripts/scale_benchmark.py
 ```
 
-CI runs on Linux, Windows, and macOS with Python 3.11, 3.12, and 3.13. A separate PostgreSQL 17 job verifies real database transactions and CLI/browser API workflows. CI checks lint, tests, accuracy fixtures, a scan of this repository, wheel contents, and a clean wheel installation. See [validation results and their limits](docs/validation.md). Benchmarks use temporary repositories; timings depend on the host and are not a CI timing gate.
+CI runs on Linux, Windows, and macOS with Python 3.11, 3.12, and 3.13. A separate PostgreSQL 17 job verifies real database transactions and CLI/browser API workflows. CI checks lint, mypy, tests with the optional language parsers, accuracy fixtures, a scan of this repository, wheel contents, and a clean wheel installation. The Ubuntu/Python 3.12 job also installs Chromium for the browser test. See [validation results and their limits](docs/validation.md). Benchmarks use temporary repositories; timings depend on the host and are not a CI timing gate.

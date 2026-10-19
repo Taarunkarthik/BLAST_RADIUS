@@ -21,7 +21,7 @@ class DependencyGraph:
                 self.reverse[target[5:]].add(source)
 
     def impact(self, file: str, *, partial: bool = False) -> dict:
-        parents = {file: None}
+        parents: dict[str, str | None] = {file: None}
         queue = deque([file])
         while queue:
             current = queue.popleft()
@@ -34,8 +34,8 @@ class DependencyGraph:
         paths = []
         for dependent in affected:
             path = [dependent]
-            while parents[path[-1]] is not None:
-                path.append(parents[path[-1]])
+            while (parent := parents[path[-1]]) is not None:
+                path.append(parent)
             paths.append(list(reversed(path)))
         count = len(affected)
         eligible = len(self.files)

@@ -3,7 +3,7 @@
 import secrets
 import threading
 from pathlib import Path
-from typing import Literal
+from typing import Literal, TypedDict
 from urllib.parse import urlsplit
 
 from fastapi import FastAPI, HTTPException, Request
@@ -16,6 +16,11 @@ from blastradius.storage import ScanStore, StoreError
 from blastradius.worker import WorkerError
 
 STATIC = Path(__file__).with_name("static")
+
+
+class HarnessState(TypedDict):
+    report: dict | None
+    path: Path
 
 
 class ScanRequest(BaseModel):
@@ -41,7 +46,7 @@ def create_app(root: Path, *, token: str | None = None) -> FastAPI:
     token = token or secrets.token_urlsafe(32)
     app = FastAPI(title="BlastRadius", docs_url=None, redoc_url=None, openapi_url=None)
     lock = threading.Lock()
-    state = {"report": None, "path": root}
+    state: HarnessState = {"report": None, "path": root}
 
     @app.middleware("http")
     async def local_access(request: Request, call_next):
@@ -114,7 +119,7 @@ def create_app(root: Path, *, token: str | None = None) -> FastAPI:
             raise HTTPException(409, "A scan or save is already running.")
         try:
             report = scan_repository(path, mode=body.mode, deterministic=True, max_files=body.max_files, max_bytes=body.max_bytes)
-            state.update(report=report, path=path)
+            state.update({"report": report, "path": path})
             return report
         except (OSError, ValueError, WorkerError, RecursionError) as error:
             raise HTTPException(422, f"Scan could not complete: {error}") from error

@@ -3,7 +3,7 @@ import subprocess
 
 import pytest
 
-from blastradius.discovery import discover
+from blastradius.discovery import discover, route
 
 
 def test_nested_gitignore_negation_and_repohealthignore(repository):
@@ -21,11 +21,29 @@ def test_nested_gitignore_negation_and_repohealthignore(repository):
 
 
 def test_unsupported_and_declaration_coverage(repository):
-    root = repository({"picture.svg": "<svg/>", "globals.d.ts": "declare const x: number;", "main.mts": ""})
+    root = repository({"picture.svg": "<svg/>", "picture.png": b"png", "globals.d.ts": "declare const x: number;", "main.mts": ""})
     files = {item.path: item for item in discover(root)}
-    assert files["picture.svg"].checker is None
+    assert files["picture.svg"].checker == "svg"
+    assert files["picture.png"].checker is None
     assert files["globals.d.ts"].skip_reason == "type declaration"
     assert files["main.mts"].checker == "javascript"
+
+
+@pytest.mark.parametrize("file,checker", [
+    ("project.TOML", "toml"), ("settings.ini", "ini"), ("icon.svg", "svg"),
+    ("script.py", "python"), (".env", "dotenv"), ("secrets.env", "dotenv"),
+    (".env.example", "dotenv"), (".example", "dotenv"),
+    ("yarn.lock", None), ("image.png", None), ("a.template", None),
+    ("a.vercel", None), ("Dockerfile", None), ("LICENSE", None),
+])
+def test_new_routes_and_out_of_scope_files(file, checker):
+    assert route(file) == checker
+
+
+def test_optional_routes_are_unsupported_without_dependencies(monkeypatch):
+    monkeypatch.setattr("blastradius.discovery.optional_parser", lambda _: None)
+    monkeypatch.setattr("blastradius.discovery.available_bash", lambda: None)
+    assert all(route(file) is None for file in ("query.sql", "view.mako", "script.sh"))
 
 
 def test_symlinks_are_not_followed(repository, tmp_path):

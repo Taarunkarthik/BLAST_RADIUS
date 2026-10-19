@@ -1,4 +1,7 @@
 import json
+from pathlib import Path
+
+import pytest
 
 from blastradius.scanner import exit_code, scan_repository
 
@@ -183,4 +186,54 @@ def test_coverage_partition_is_complete(repository):
     root = repository({"a.ts": "", "b.ts": "", "defs.d.ts": "", "icon.svg": "", "config.json": "{}"})
     scan = scan_repository(root, max_files=1)["scan"]
     assert scan["files_discovered"] == scan["files_checked"] + scan["not_checked_count"] + len(scan["excluded_files"]) + len(scan["skipped_files"])
+
+
+def test_new_syntax_checkers_are_read_only_and_have_no_graph_impact(repository):
+    root = repository({"bad.toml": "x = ?", "bad.ini": "[x]\nbad line", "bad.svg": "<svg>",
+                       "bad.py": "def broken(:", ".env": "bad line", ".env.example": "bad line"})
+    before = {file.name: (file.read_bytes(), file.stat().st_mtime_ns) for file in root.iterdir()}
+    report = scan_repository(root, deterministic=True)
+    assert {issue["type"] for issue in report["issues"]} == {
+        "invalid_toml", "invalid_ini", "invalid_svg", "invalid_python", "invalid_dotenv"}
+    assert report["scan"]["files_checked"] == 6
+    assert report["scan"]["not_checked_types"] == []
+    assert all(issue["severity"] == "medium" and not issue["has_tree_impact"] for issue in report["issues"])
+    assert report["graph"] == {"nodes": [], "edges": []}
+    assert before == {file.name: (file.read_bytes(), file.stat().st_mtime_ns) for file in root.iterdir()}
+    structure = scan_repository(root, mode="structure")
+    assert structure["scan"]["files_checked"] == 0
+    assert len(structure["scan"]["excluded_files"]) == 6
+
+
+@pytest.mark.parametrize("suffix", ["toml", "ini", "svg", "py", "env", "example", "sql", "mako", "sh"])
+def test_new_checkers_respect_byte_bounds(repository, monkeypatch, suffix):
+    from blastradius import scanner
+    monkeypatch.setattr("blastradius.discovery.optional_parser", lambda _: object())
+    monkeypatch.setattr("blastradius.discovery.available_bash", lambda: "bash")
+    root = repository({f"too-large.{suffix}": "x" * 100})
+    def never_check(*args):
+        pytest.fail("Oversized input reached a checker")
+    for name in scanner.TEXT_CHECKERS:
+        monkeypatch.setitem(scanner.TEXT_CHECKERS, name, never_check)
+    report = scan_repository(root, max_bytes=10)
+    assert report["scan"]["files_checked"] == 0
+    assert report["scan"]["skipped_files"] == [{"file": f"too-large.{suffix}", "reason": "file size limit"}]
+    assert report["issues"] == []
+
+
+def test_optional_checkers_absent_stay_unsupported(repository, monkeypatch):
+    monkeypatch.setattr("blastradius.discovery.optional_parser", lambda _: None)
+    monkeypatch.setattr("blastradius.discovery.available_bash", lambda: None)
+    report = scan_repository(repository({"a.sql": "broken", "b.mako": "broken", "c.sh": "broken"}))
+    assert report["scan"]["not_checked_types"] == [".mako", ".sh", ".sql"]
+    assert report["scan"]["files_checked"] == 0
+    assert report["issues"] == [] and not report["scan"]["partial"]
+
+
+def test_demo_coverage_includes_valid_svg_without_new_findings():
+    report = scan_repository(Path(__file__).resolve().parents[1] / "examples/demo", deterministic=True)
+    assert report["scan"]["files_discovered"] == report["scan"]["files_checked"] == 10
+    assert report["scan"]["not_checked_count"] == 0
+    assert report["scan"]["not_checked_types"] == []
+    assert report["summary"] == {"issues": 5, "high": 1, "medium": 3, "low": 1}
 
