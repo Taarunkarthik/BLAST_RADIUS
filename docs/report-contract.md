@@ -55,7 +55,7 @@ The local harness returns this same scan contract from `POST /api/scan` and `GET
 
 ## Parser worker protocol v1
 
-The Python client launches the bundled `node/worker.mjs` once per scan, then exchanges one JSON object per line over stdin/stdout. It removes `NODE_OPTIONS` and `NODE_PATH` from the child environment. No target repository modules or scripts are loaded into the worker.
+The Python client launches the bundled `node/worker.mjs` once per scan, then exchanges one JSON object per line over stdin/stdout. It removes `NODE_OPTIONS` and `NODE_PATH` from the child environment. No target repository modules or scripts are loaded into the worker. The client sends `analyze` requests in bounded batches (about 8 MB or 250 files each) so peak memory tracks one batch rather than the total source size; the protocol version and method names are unchanged.
 
 Requests:
 
@@ -69,4 +69,4 @@ Requests:
 
 Supported checker values are `javascript`, `css`, and `jsonc`. Responses echo `version` and `id`, with either `result` or `error`. The `analyze` result has per-file diagnostics, import edges, ignored imports, and stylesheet references. Python owns coverage accounting and report merging. Syntax findings are data; protocol errors are operational failures.
 
-The client enforces a 60-second response deadline, closes the worker on completion, and fails explicitly if the worker exits, stalls, or returns an invalid response.
+The client enforces a response deadline per request (60 seconds by default, configurable with `--timeout`), closes the worker on completion, and fails explicitly if the worker exits, stalls, or returns an invalid response.

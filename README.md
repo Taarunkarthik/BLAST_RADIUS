@@ -136,10 +136,11 @@ blastradius scan --path /path/to/repository
 blastradius scan --path /path/to/repository --format json --deterministic-id
 blastradius scan --mode structure
 blastradius scan --mode health
+blastradius scan --path /path/to/repository --timeout 120
 blastradius --format json --fail-on medium scan --path /path/to/repository
 ```
 
-Global output flags also work after `scan`. `--logs` writes file coverage to stderr, keeping JSON stdout parseable.
+Global output flags also work after `scan`. `--logs` writes file coverage to stderr, keeping JSON stdout parseable. `--max-files`, `--max-bytes`, and `--timeout` bound the scan: eligible files, bytes per checked file, and seconds to wait for a parser worker response.
 
 | Mode | File checks | JS/TS dependency graph |
 | --- | --- | --- |
@@ -182,7 +183,7 @@ Non-JS files explicitly report **No Tree Impact**, because they are outside the 
 
 The walker applies built-in exclusions, nested `.gitignore`, and nested `.repohealthignore` patterns. Built-in ignored directories include `.git`, `node_modules`, virtual environments, build output, and caches. Declaration files and symbolic links/junctions are excluded explicitly. Unsupported extensions are counted and listed in every report.
 
-By default a scan checks up to 5,000 eligible files, each up to 2 MB. Increase the bounds with `--max-files` and `--max-bytes`. Files beyond a limit or unreadable text produce a partial report. Missing graph coverage and unsupported resolution are also explicit. Ignored paths are outside coverage and are not counted as checked.
+By default a scan checks up to 5,000 eligible files, each up to 2 MB. Increase the bounds with `--max-files` and `--max-bytes`; `--timeout` sets the parser worker's response deadline in seconds (default 60, minimum 1). Referenced JSON is validated up to the same `--max-bytes` limit. Files beyond a limit or unreadable text produce a partial report. Missing graph coverage and unsupported resolution are also explicit. Ignored paths are outside coverage and are not counted as checked.
 
 ### Exit codes
 
@@ -217,7 +218,7 @@ Read [the implementation phases and status](docs/PHASES.md), [the implementation
 
 ## Limits of this release
 
-This is a static diagnostic MVP. It does not run a type checker, compile Sass, validate CSS property values, execute bundler configuration, or prove runtime behavior. Computed JS imports and custom bundler resolvers may leave partial coverage. Sass package load paths and interpolation are not resolved. Remote links are not requested; HTML/Markdown anchor fragments are not validated. JSON references use filesystem-relative paths; nested JSON Schema `$id` rebasing is not implemented.
+This is a static diagnostic MVP. It does not run a type checker, compile Sass, validate CSS property values, execute bundler configuration, or prove runtime behavior. Computed JS imports and custom bundler resolvers may leave partial coverage. Sass package load paths and interpolation are not resolved. Remote links are not requested; HTML/Markdown anchor fragments are not validated. Workspace-linked local packages are included in the graph even though they resolve through `node_modules`. JSON references use filesystem-relative paths and are read up to the `--max-bytes` limit; nested JSON Schema `$id` rebasing is not implemented.
 
 All seven phases are marked complete in the phases document, including the optional PostgreSQL store and FastAPI browser harness. Python, Go, and Rust files appear as unsupported, as specified for the MVP. The remaining coverage extensions are listed explicitly in [the phases document](docs/PHASES.md).
 
@@ -232,7 +233,7 @@ python scripts/accuracy.py
 python scripts/scale_benchmark.py
 ```
 
-CI runs on Linux, Windows, and macOS with Python 3.11, 3.12, and 3.13. A separate PostgreSQL 17 job verifies real database transactions and CLI/browser API workflows. CI checks lint, tests, accuracy fixtures, a scan of this repository, wheel contents, and a clean wheel installation. See [validation results and their limits](docs/validation.md). Benchmarks use temporary repositories; timings depend on the host and are not a CI timing gate.
+CI runs on Linux, Windows, and macOS with Python 3.11, 3.12, 3.13, and 3.14. A separate PostgreSQL 17 job verifies real database transactions and CLI/browser API workflows. CI checks lint, type checking (mypy), tests, a coverage floor, accuracy fixtures, a scan of this repository, wheel contents, and a clean wheel installation. See [validation results and their limits](docs/validation.md). Benchmarks use temporary repositories; timings depend on the host and are not a CI timing gate.
 
 ## License
 

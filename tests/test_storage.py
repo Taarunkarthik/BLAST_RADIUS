@@ -2,8 +2,8 @@ import json
 import os
 from copy import deepcopy
 
+import httpx
 import pytest
-from fastapi.testclient import TestClient
 from typer.testing import CliRunner
 
 from blastradius.cli import app
@@ -102,31 +102,32 @@ def test_postgres_migrations_repeat_and_ids_are_project_scoped(store, repository
     assert store.save(a, first)["id"] != store.save(b, second)["id"]
 
 
-def test_postgres_harness_save_history_compare_and_project_scope(store, repository, monkeypatch):
+@pytest.mark.anyio
+async def test_postgres_harness_save_history_compare_and_project_scope(store, repository, monkeypatch):
     monkeypatch.setenv("BLASTRADIUS_DATABASE_URL", store.database_url)
     root = repository({"bad.json": "{", "nested/good.json": "{}"})
     project = store.add_project(root)
-    with TestClient(create_app(root, token="test-session"), base_url="http://127.0.0.1", client=("127.0.0.1", 50000)) as browser:
-        browser.headers["x-blastradius-token"] = "test-session"
-        assert browser.get("/api/session").json()["persistence"] is True
-        base = browser.post("/api/scan", json={}).json()
-        saved = browser.post("/api/save", json={"report_id": base["scan"]["id"]})
+    transport = httpx.ASGITransport(app=create_app(root, token="test-session"), client=("127.0.0.1", 50000))
+    async with httpx.AsyncClient(transport=transport, base_url="http://127.0.0.1", headers={"x-blastradius-token": "test-session"}) as browser:
+        assert (await browser.get("/api/session")).json()["persistence"] is True
+        base = (await browser.post("/api/scan", json={})).json()
+        saved = await browser.post("/api/save", json={"report_id": base["scan"]["id"]})
         assert saved.status_code == 200, saved.text
         base_id = saved.json()["id"]
         (root / "bad.json").write_text("{}")
-        head = browser.post("/api/scan", json={}).json()
-        saved = browser.post("/api/save", json={"report_id": head["scan"]["id"]})
+        head = (await browser.post("/api/scan", json={})).json()
+        saved = await browser.post("/api/save", json={"report_id": head["scan"]["id"]})
         assert saved.status_code == 200, saved.text
         head_id = saved.json()["id"]
-        history = browser.get("/api/history").json()
+        history = (await browser.get("/api/history")).json()
         assert history["project"]["id"] == project["id"]
         assert {scan["id"] for scan in history["scans"]} == {base_id, head_id}
-        comparison = browser.post("/api/compare", json={"base": base_id, "head": head_id})
+        comparison = await browser.post("/api/compare", json={"base": base_id, "head": head_id})
         assert comparison.status_code == 200, comparison.text
         assert comparison.json()["summary"]["resolved"] == 1
         nested = root / "nested"
         store.add_project(nested)
         outside_history = store.save(scan_repository(nested, deterministic=True), nested)
-        assert browser.post("/api/compare", json={"base": base_id, "head": outside_history["id"]}).status_code == 403
-        subreport = browser.post("/api/scan", json={"path": "nested"}).json()
-        assert browser.post("/api/save", json={"report_id": subreport["scan"]["id"]}).status_code == 422
+        assert (await browser.post("/api/compare", json={"base": base_id, "head": outside_history["id"]})).status_code == 403
+        subreport = (await browser.post("/api/scan", json={"path": "nested"})).json()
+        assert (await browser.post("/api/save", json={"report_id": subreport["scan"]["id"]})).status_code == 422

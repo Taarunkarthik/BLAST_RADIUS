@@ -6,9 +6,11 @@ from pathlib import Path
 from typing import Literal
 from urllib.parse import urlsplit
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from pydantic import BaseModel, Field
+from starlette.datastructures import Headers, MutableHeaders
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from blastradius.comparison import compare_saved
 from blastradius.scanner import scan_repository
@@ -16,6 +18,109 @@ from blastradius.storage import ScanStore, StoreError
 from blastradius.worker import WorkerError
 
 STATIC = Path(__file__).with_name("static")
+
+LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
+LOOPBACK_PEERS = frozenset({"127.0.0.1", "::1", "::ffff:127.0.0.1"})
+MAX_BODY_BYTES = 8192
+SECURITY_HEADERS = {
+    "Cache-Control": "no-store",
+    "X-Content-Type-Options": "nosniff",
+    "Referrer-Policy": "no-referrer",
+    "Content-Security-Policy": (
+        "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; "
+        "object-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'"
+    ),
+}
+
+
+async def _read_capped(receive: Receive) -> tuple[bytes, bool]:
+    """Read a request body, stopping as soon as it exceeds the cap."""
+    received = bytearray()
+    while True:
+        message = await receive()
+        if message["type"] == "http.disconnect":
+            break
+        if message["type"] != "http.request":
+            continue
+        received.extend(message.get("body", b""))
+        if len(received) > MAX_BODY_BYTES:
+            return b"", True
+        if not message.get("more_body", False):
+            break
+    return bytes(received), False
+
+
+def _replay(body: bytes) -> Receive:
+    """Serve a buffered body on the receive channel without touching private state."""
+    delivered = False
+
+    async def receive() -> Message:
+        nonlocal delivered
+        if delivered:
+            return {"type": "http.disconnect"}
+        delivered = True
+        return {"type": "http.request", "body": body, "more_body": False}
+
+    return receive
+
+
+def _with_security_headers(send: Send) -> Send:
+    async def send_with_headers(message: Message) -> None:
+        if message["type"] == "http.response.start":
+            MutableHeaders(scope=message).update(SECURITY_HEADERS)
+        await send(message)
+
+    return send_with_headers
+
+
+class LocalAccessMiddleware:
+    """Enforce loopback-only access, JSON bodies and a capped request body.
+
+    Implemented as raw ASGI middleware so the capped body is replayed on the
+    ``receive`` channel instead of mutating Starlette's private ``Request._body``.
+    """
+
+    def __init__(self, app: ASGIApp, *, token: str) -> None:
+        self.app = app
+        self.token = token
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        blocked = self._blocked(scope, Headers(scope=scope))
+        if blocked is not None:
+            await blocked(scope, receive, send)
+            return
+        if scope["method"] == "POST":
+            body, too_large = await _read_capped(receive)
+            if too_large:
+                await JSONResponse({"detail": "Request body is too large."}, status_code=413)(scope, receive, send)
+                return
+            receive = _replay(body)
+        await self.app(scope, receive, _with_security_headers(send))
+
+    def _blocked(self, scope: Scope, headers: Headers) -> JSONResponse | None:
+        host = headers.get("host", "")
+        try:
+            parsed = urlsplit("http://" + host)
+            allowed = parsed.hostname in LOOPBACK_HOSTS and parsed.username is None
+        except ValueError:
+            allowed = False
+        client = scope.get("client")
+        peer = client[0] if client else ""
+        if not allowed or peer not in LOOPBACK_PEERS:
+            return JSONResponse({"detail": "The harness accepts loopback requests only."}, status_code=403)
+        origin = headers.get("origin")
+        if origin and origin != f"http://{host}":
+            return JSONResponse({"detail": "Cross-origin requests are not allowed."}, status_code=403)
+        if headers.get("sec-fetch-site") == "cross-site":
+            return JSONResponse({"detail": "Cross-site requests are not allowed."}, status_code=403)
+        if scope["path"].startswith("/api/") and not secrets.compare_digest(headers.get("x-blastradius-token", ""), self.token):
+            return JSONResponse({"detail": "Missing or invalid local session token."}, status_code=403)
+        if scope["method"] == "POST" and headers.get("content-type", "").split(";", 1)[0] != "application/json":
+            return JSONResponse({"detail": "JSON request body required."}, status_code=415)
+        return None
 
 
 class ScanRequest(BaseModel):
@@ -40,44 +145,9 @@ def create_app(root: Path, *, token: str | None = None) -> FastAPI:
         raise ValueError("Harness root must be a directory.")
     token = token or secrets.token_urlsafe(32)
     app = FastAPI(title="BlastRadius", docs_url=None, redoc_url=None, openapi_url=None)
+    app.add_middleware(LocalAccessMiddleware, token=token)
     lock = threading.Lock()
     state = {"report": None, "path": root}
-
-    @app.middleware("http")
-    async def local_access(request: Request, call_next):
-        host = request.headers.get("host", "")
-        try:
-            parsed = urlsplit("http://" + host)
-            allowed = parsed.hostname in {"127.0.0.1", "localhost", "::1"} and parsed.username is None
-        except ValueError:
-            allowed = False
-        peer = request.client.host if request.client else ""
-        if not allowed or peer not in {"127.0.0.1", "::1", "::ffff:127.0.0.1"}:
-            return JSONResponse({"detail": "The harness accepts loopback requests only."}, status_code=403)
-        origin = request.headers.get("origin")
-        if origin and origin != f"http://{host}":
-            return JSONResponse({"detail": "Cross-origin requests are not allowed."}, status_code=403)
-        if request.headers.get("sec-fetch-site") == "cross-site":
-            return JSONResponse({"detail": "Cross-site requests are not allowed."}, status_code=403)
-        if request.url.path.startswith("/api/") and not secrets.compare_digest(request.headers.get("x-blastradius-token", ""), token):
-            return JSONResponse({"detail": "Missing or invalid local session token."}, status_code=403)
-        if request.method == "POST":
-            if request.headers.get("content-type", "").split(";", 1)[0] != "application/json":
-                return JSONResponse({"detail": "JSON request body required."}, status_code=415)
-            # Body is capped before Pydantic parsing, including chunked requests.
-            received = bytearray()
-            async for chunk in request.stream():
-                received.extend(chunk)
-                if len(received) > 8192:
-                    return JSONResponse({"detail": "Request body is too large."}, status_code=413)
-            request._body = bytes(received)
-        response = await call_next(request)
-        response.headers.update({
-            "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff",
-            "Referrer-Policy": "no-referrer",
-            "Content-Security-Policy": "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; object-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'",
-        })
-        return response
 
     @app.get("/", response_class=HTMLResponse)
     def index():

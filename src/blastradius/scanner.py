@@ -3,6 +3,7 @@
 import hashlib
 import json
 from collections import Counter
+from collections.abc import Iterator
 from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
@@ -20,8 +21,13 @@ from blastradius.graph import DependencyGraph
 from blastradius.models import Issue
 from blastradius.worker import NodeWorker
 
+# Node parser requests are batched so peak memory stays near one batch instead of
+# the total source size; the worker reuses resolution caches across batches.
+NODE_BATCH_MAX_BYTES = 8_000_000
+NODE_BATCH_MAX_FILES = 250
 
-def scan_repository(root: Path, *, mode="all", deterministic=False, max_files=5000, max_bytes=2_000_000) -> dict:
+
+def scan_repository(root: Path, *, mode="all", deterministic=False, max_files=5000, max_bytes=2_000_000, worker_timeout: float = 60.0) -> dict:
     root = root.resolve()
     if not root.is_dir():
         raise ValueError("Scan path must be an existing directory.")
@@ -29,7 +35,7 @@ def scan_repository(root: Path, *, mode="all", deterministic=False, max_files=50
         raise ValueError("Unknown scan mode.")
     discovered = discover(root)
     unsupported, excluded, skipped, checked = [], [], [], []
-    sources, node_inputs, issues, imports = {}, [], [], []
+    sources, node_files, issues, imports = {}, [], [], []
     ignored_imports, limitations, file_hashes = [], [], {}
     for item in discovered:
         if item.skip_reason:
@@ -65,28 +71,30 @@ def scan_repository(root: Path, *, mode="all", deterministic=False, max_files=50
         sources[item.path] = item.checker
         file_hashes[item.path] = hashlib.sha256(raw).hexdigest()
         if item.checker in {"javascript", "css", "jsonc"}:
-            node_inputs.append({"file": item.path, "checker": item.checker, "content": content})
+            node_files.append(item.path)
         elif item.checker == "json":
-            issues.extend(check_json(root, item.path, content))
+            issues.extend(check_json(root, item.path, content, max_ref_bytes=max_bytes))
         elif item.checker == "yaml":
             issues.extend(check_yaml(item.path, content))
         elif item.checker == "html":
             issues.extend(check_html(root, item.path, content))
         elif item.checker == "markdown":
             issues.extend(check_markdown(root, item.path, content))
-    if node_inputs:
-        with NodeWorker() as worker:
-            # A single request allows TypeScript resolution caches to span the full scan.
-            result = worker.request("analyze", root=str(root), files=node_inputs)
-        for output in result["files"]:
-            issues.extend(Issue(**issue) for issue in output["issues"])
-            imports.extend(output["imports"])
-            ignored_imports.extend(output["ignored_imports"])
-            limitations.extend(output["limitations"])
-            if "references" in output:
-                css_issues, css_limits = check_css_references(root, output["file"], output["references"])
-                issues.extend(css_issues)
-                limitations.extend(css_limits)
+    if node_files:
+        with NodeWorker(timeout=worker_timeout) as worker:
+            # Batched requests against one worker keep peak memory near a single
+            # batch; TypeScript resolution caches still span the full scan.
+            for batch in _node_batches(root, node_files, sources):
+                result = worker.request("analyze", root=str(root), files=batch)
+                for output in result["files"]:
+                    issues.extend(Issue(**issue) for issue in output["issues"])
+                    imports.extend(output["imports"])
+                    ignored_imports.extend(output["ignored_imports"])
+                    limitations.extend(output["limitations"])
+                    if "references" in output:
+                        css_issues, css_limits = check_css_references(root, output["file"], output["references"])
+                        issues.extend(css_issues)
+                        limitations.extend(css_limits)
     graph_files = [file for file in checked if sources[file] == "javascript"]
     graph_file_set = set(graph_files)
     # Imports to excluded source files are retained in the graph but coverage is explicit.
@@ -140,6 +148,31 @@ def scan_repository(root: Path, *, mode="all", deterministic=False, max_files=50
         report["scan"]["id"] = str(uuid4())
         report["scan"]["created_at"] = datetime.now(UTC).isoformat()
     return report
+
+
+def _node_batches(root: Path, node_files: list[str], sources: dict[str, str]) -> Iterator[list[dict]]:
+    """Yield node-file entries in batches bounded by cumulative bytes and file count.
+
+    Contents were already validated and hashed during discovery, so re-reading the
+    files here keeps only a single batch's contents in memory at a time.
+    """
+    batch: list[dict] = []
+    batch_bytes = 0
+    for file in node_files:
+        try:
+            with (root / file).open("rb") as stream:
+                raw = stream.read()
+            content = raw.decode("utf-8-sig")
+        except (OSError, UnicodeError):
+            continue
+        entry = {"file": file, "checker": sources[file], "content": content}
+        if batch and (batch_bytes + len(raw) > NODE_BATCH_MAX_BYTES or len(batch) >= NODE_BATCH_MAX_FILES):
+            yield batch
+            batch, batch_bytes = [], 0
+        batch.append(entry)
+        batch_bytes += len(raw)
+    if batch:
+        yield batch
 
 
 def exit_code(report: dict, fail_on: str) -> int:

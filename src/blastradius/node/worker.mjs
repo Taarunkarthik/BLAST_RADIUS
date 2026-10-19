@@ -19,6 +19,26 @@ const inside = (root, file) => {
 const readJson = file => { try { return JSON.parse(fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, '')); } catch { return null; } };
 const issue = (file, line, type, target = '', message = '', severity = 'high') => ({ file, line, type, severity, target, message });
 
+// Resolution caches are reused across analyze calls that share a scan root so a
+// long-lived worker can serve batched requests without starting cold each time.
+const rootCaches = new Map();
+function cachesFor(root) {
+  if (!rootCaches.has(root)) {
+    rootCaches.set(root, {
+      configCache: new Map(),
+      directoryConfigCache: new Map(),
+      manifestCache: new Map(),
+      directoryManifestCache: new Map(),
+      existenceCache: new Map(),
+      realpathCache: new Map(),
+      packageCache: new Map(),
+      brokenManifests: new Set(),
+      sourceFiles: new Map(),
+    });
+  }
+  return rootCaches.get(root);
+}
+
 function ancestors(start, root) {
   const result = [];
   let current = start;
@@ -32,17 +52,14 @@ function ancestors(start, root) {
 
 function analyze({ root: rootInput, files }) {
   const root = path.resolve(rootInput);
-  const configCache = new Map();
-  const directoryConfigCache = new Map();
-  const manifestCache = new Map();
-  const directoryManifestCache = new Map();
-  const existenceCache = new Map();
-  const realpathCache = new Map();
-  const packageCache = new Map();
-  const sourceFiles = new Map(files.filter(input => input.checker === 'javascript').map(input => {
+  const { configCache, directoryConfigCache, manifestCache, directoryManifestCache, existenceCache, realpathCache, packageCache, brokenManifests, sourceFiles } = cachesFor(root);
+  // Source files accumulate across batches so later requests can reference files
+  // seen earlier; the latest content wins if a file is sent twice.
+  for (const input of files) {
+    if (input.checker !== 'javascript') continue;
     const absolute = path.resolve(root, input.file);
-    return [absolute, ts.createSourceFile(absolute, input.content, ts.ScriptTarget.Latest, true)];
-  }));
+    sourceFiles.set(absolute, ts.createSourceFile(absolute, input.content, ts.ScriptTarget.Latest, true));
+  }
   // A memory-only compiler host supplies grammar checks and lexical binding. No
   // standard libraries, project modules, emit, or semantic diagnostics are loaded.
   let syntaxProgram;
@@ -108,8 +125,12 @@ function analyze({ root: rootInput, files }) {
     for (const parent of ancestors(directory, root)) {
       const candidate = path.join(parent, 'package.json');
       if (fileExists(candidate)) {
-        if (!manifestCache.has(candidate)) manifestCache.set(candidate, readJson(candidate) || {});
-        const value = manifestCache.get(candidate);
+        const parsed = readJson(candidate);
+        // A malformed nearest package.json still yields an empty manifest, but the
+        // directory is flagged so affected files can carry a limitation.
+        if (parsed === null) brokenManifests.add(directory);
+        const value = parsed === null ? {} : parsed;
+        if (!manifestCache.has(candidate)) manifestCache.set(candidate, value);
         directoryManifestCache.set(directory, value);
         return value;
       }
@@ -175,6 +196,9 @@ function analyze({ root: rootInput, files }) {
       output.issues.push(issue(file, 1, 'unsupported_resolution', 'tsconfig/jsconfig', ts.flattenDiagnosticMessageText(error.messageText, '\n'), 'medium'));
     }
     const pkg = manifest(absolute);
+    if (brokenManifests.has(path.dirname(absolute))) {
+      output.limitations.push({ file, reason: 'Nearest package.json could not be parsed; package declarations were not evaluated.' });
+    }
     const declared = { ...pkg.dependencies, ...pkg.devDependencies, ...pkg.peerDependencies, ...pkg.optionalDependencies };
     const imports = [];
     function collect(node) {
@@ -231,14 +255,22 @@ function analyze({ root: rootInput, files }) {
       }
       const resolution = ts.resolveModuleName(specifier, absolute, config.options, ts.sys, config.cache, undefined,
         item.commonjs ? ts.ModuleKind.CommonJS : ts.ModuleKind.ESNext).resolvedModule;
-      if (resolution && inside(root, resolution.resolvedFileName) && !posix(path.relative(root, resolution.resolvedFileName)).split('/').includes('node_modules')) {
-        if (!sourcePattern.test(resolution.resolvedFileName) || /\.d\.[cm]?ts$/.test(resolution.resolvedFileName)) {
+      // Workspace-linked packages resolve through node_modules even though their real
+      // path lives inside the scan root; prefer the real path so they join the graph.
+      let resolvedFileName = resolution?.resolvedFileName;
+      if (resolvedFileName && (!inside(root, resolvedFileName) || posix(path.relative(root, resolvedFileName)).split('/').includes('node_modules'))) {
+        if (!realpathCache.has(resolvedFileName)) realpathCache.set(resolvedFileName, fs.realpathSync(resolvedFileName));
+        const real = realpathCache.get(resolvedFileName);
+        if (inside(root, real)) resolvedFileName = real;
+      }
+      if (resolvedFileName && inside(root, resolvedFileName) && !posix(path.relative(root, resolvedFileName)).split('/').includes('node_modules')) {
+        if (!sourcePattern.test(resolvedFileName) || /\.d\.[cm]?ts$/.test(resolvedFileName)) {
           output.ignored_imports.push({ file, line, target: specifier, reason: 'non-source or declaration-only import' });
         } else {
-          if (!realpathCache.has(resolution.resolvedFileName)) realpathCache.set(resolution.resolvedFileName, fs.realpathSync(resolution.resolvedFileName));
-          const real = realpathCache.get(resolution.resolvedFileName);
+          if (!realpathCache.has(resolvedFileName)) realpathCache.set(resolvedFileName, fs.realpathSync(resolvedFileName));
+          const real = realpathCache.get(resolvedFileName);
           if (!inside(root, real)) addIssue('invalid_path', 'Resolved module points outside the scan root.');
-          else addEdge(`file:${posix(path.relative(root, resolution.resolvedFileName))}`);
+          else addEdge(`file:${posix(path.relative(root, resolvedFileName))}`);
         }
         continue;
       }

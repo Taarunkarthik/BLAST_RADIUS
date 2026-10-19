@@ -1,5 +1,6 @@
 import json
 
+from blastradius import scanner
 from blastradius.scanner import exit_code, scan_repository
 
 
@@ -183,4 +184,60 @@ def test_coverage_partition_is_complete(repository):
     root = repository({"a.ts": "", "b.ts": "", "defs.d.ts": "", "icon.svg": "", "config.json": "{}"})
     scan = scan_repository(root, max_files=1)["scan"]
     assert scan["files_discovered"] == scan["files_checked"] + scan["not_checked_count"] + len(scan["excluded_files"]) + len(scan["skipped_files"])
+
+
+class _RecordingWorker:
+    """Stand-in for NodeWorker that records request batches and echoes empty results."""
+
+    def __init__(self, **kwargs):
+        self.kwargs = kwargs
+        self.batches = []
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_):
+        pass
+
+    def request(self, method, **params):
+        self.batches.append(params["files"])
+        return {"files": [
+            {"file": entry["file"], "issues": [], "imports": [], "ignored_imports": [], "limitations": []}
+            for entry in params["files"]
+        ]}
+
+
+def test_node_requests_are_batched_with_bounded_payloads(repository, monkeypatch):
+    root = repository({f"src/mod{i}.ts": "export const x = 1;" for i in range(20)})
+    worker = _RecordingWorker()
+    monkeypatch.setattr(scanner, "NodeWorker", lambda **kwargs: worker)
+    monkeypatch.setattr(scanner, "NODE_BATCH_MAX_BYTES", 64)
+    scan_repository(root)
+    assert len(worker.batches) > 1
+    assert all(sum(len(entry["content"]) for entry in batch) <= 64 for batch in worker.batches)
+    assert sorted(entry["file"] for batch in worker.batches for entry in batch) == sorted(f"src/mod{i}.ts" for i in range(20))
+
+
+def test_node_batching_matches_single_request(repository, monkeypatch):
+    files = {f"src/mod{i}.ts": f"import {{x}} from './mod{(i + 1) % 20}'; export const x = {i};" for i in range(20)}
+    root = repository(files)
+    single = scan_repository(root, deterministic=True)
+    monkeypatch.setattr(scanner, "NODE_BATCH_MAX_BYTES", 64)
+    batched = scan_repository(root, deterministic=True)
+    assert single == batched
+
+
+def test_worker_timeout_is_plumbed_to_node_worker(repository, monkeypatch):
+    captured = {}
+
+    def factory(**kwargs):
+        captured.update(kwargs)
+        return _RecordingWorker(**kwargs)
+
+    monkeypatch.setattr(scanner, "NodeWorker", factory)
+    scan_repository(repository({"main.ts": "export {};"}), worker_timeout=12.5)
+    assert captured["timeout"] == 12.5
+    captured.clear()
+    scan_repository(repository({"main.ts": "export {};"}))
+    assert captured["timeout"] == 60.0
 

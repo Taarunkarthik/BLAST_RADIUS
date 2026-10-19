@@ -70,14 +70,29 @@ def _json_pointer(document, fragment):
     return True
 
 
-def check_json(root: Path, file: str, content: str) -> list[Issue]:
+def _is_object_key(content: str, start: int) -> bool:
+    """True when the quote at ``start`` opens an object key rather than string content.
+
+    Valid JSON places a ``"key"`` token only right after ``{`` or ``,`` (ignoring
+    whitespace); the same text inside a string value is preceded by string content
+    instead, so ``$ref`` mentions inside values can never pass this guard.
+    """
+    index = start - 1
+    while index >= 0 and content[index] in " \t\r\n":
+        index -= 1
+    return index >= 0 and content[index] in "{,"
+
+
+def check_json(root: Path, file: str, content: str, *, max_ref_bytes: int = 2_000_000) -> list[Issue]:
     try:
         document = json.loads(content, parse_constant=lambda value: (_ for _ in ()).throw(ValueError(f"Non-JSON value {value}")))
     except (ValueError, RecursionError) as error:
         return [Issue(file, getattr(error, "lineno", 1), "invalid_json", "medium", message=str(error))]
     issues = []
-    # A syntax-aware pass above ensures these are actual JSON string values.
+    # The object-key guard ensures these are real $ref keys, never "$ref" text inside string values.
     for match in re.finditer(r'"\$ref"\s*:\s*("(?:[^"\\]|\\.)*")', content):
+        if not _is_object_key(content, match.start()):
+            continue
         target = json.loads(match[1])
         line = content.count("\n", 0, match.start()) + 1
         try:
@@ -90,9 +105,9 @@ def check_json(root: Path, file: str, content: str) -> list[Issue]:
                 if not candidate.is_file():
                     raise ValueError("Referenced file does not exist")
                 if url.fragment:
-                    if candidate.stat().st_size > 2_000_000:
+                    if candidate.stat().st_size > max_ref_bytes:
                         # Report the unvalidated reference honestly instead of reading an unbounded file.
-                        raise ValueError("Referenced JSON exceeds the 2 MB reference-validation limit")
+                        raise ValueError(f"Referenced JSON exceeds the {max_ref_bytes} byte reference-validation limit")
                     referenced = json.loads(candidate.read_text(encoding="utf-8-sig"))
             if url.fragment and not _json_pointer(referenced, url.fragment):
                 raise ValueError("JSON fragment does not exist")

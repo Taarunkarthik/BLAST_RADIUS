@@ -6,6 +6,7 @@ import sys
 from typer.testing import CliRunner
 
 from blastradius.cli import app
+from blastradius.scanner import scan_repository as real_scan_repository
 
 runner = CliRunner()
 
@@ -53,6 +54,23 @@ def test_root_failure_is_visible_in_text(repository):
     result = runner.invoke(app, ["scan", "--path", str(root), "--deterministic-id"])
     assert result.exit_code == 1
     assert "CRITICAL - root node" in result.stdout
+
+
+def test_timeout_option_is_plumbed_through(tmp_path, monkeypatch):
+    captured = {}
+
+    def fake_scan(root, **kwargs):
+        captured.update(kwargs)
+        return real_scan_repository(root, **kwargs)
+
+    monkeypatch.setattr("blastradius.cli.scan_repository", fake_scan)
+    for args, expected in ((["--timeout", "7"], 7), ([], 60)):
+        captured.clear()
+        result = runner.invoke(app, ["scan", "--path", str(tmp_path), "--fail-on", "none", *args])
+        assert result.exit_code == 0, result.output
+        assert captured["worker_timeout"] == expected
+    result = runner.invoke(app, ["scan", "--path", str(tmp_path), "--timeout", "0"])
+    assert result.exit_code == 2
 
 
 def test_deterministic_output_across_processes_and_hash_seeds(repository):

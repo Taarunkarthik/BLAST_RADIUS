@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- Add `--timeout` to `blastradius scan` to bound the parser worker response deadline (default 60 seconds, minimum 1).
+- Support Python 3.14 in the classifiers and the CI matrix.
+- Enforce mypy type checking and a 75% coverage floor in CI.
+- Add MIT `license`, classifiers, keywords, and `[project.urls]` packaging metadata.
+
+### Fixed
+- Send Node parser requests in bounded batches (about 8 MB or 250 files) so peak memory no longer scales with total source size.
+- Report a nearest `package.json` that cannot be parsed as a coverage limitation instead of cascading `undeclared_external_package` findings.
+- Include workspace-linked local packages whose real path is inside the scan root in the dependency graph.
+- Honor `--max-bytes` for JSON reference validation instead of a fixed 2 MB cap.
+- Match only structural `$ref` keys so `$ref` text inside string values is not validated.
+- Walk directories iteratively so deep trees have no recursion limit.
+- Rework the harness request body cap and migrate the harness tests to the httpx ASGI transport.
+
 ## [0.1.0] - 2026-10-18
 
 ### Added
