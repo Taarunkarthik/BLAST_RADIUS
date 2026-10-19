@@ -239,4 +239,9 @@ def create_app(root: Path, *, token: str | None = None) -> FastAPI:
         except (StoreError, ValueError) as error:
             raise HTTPException(422, str(error)) from error
 
+    # Serve the remaining static assets at the web root so index.html can use
+    # document-relative URLs (which also resolve on disk for the repo's own HTML
+    # link check). Registered last: the explicit routes and /api/* above win.
+    app.mount("/", StaticFiles(directory=STATIC, html=False), name="static-root")
+
     return app

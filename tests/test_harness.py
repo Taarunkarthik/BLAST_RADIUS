@@ -56,6 +56,13 @@ async def test_browser_assets_and_session(client):
     "/static/styles/dependencies.css",
     "/static/styles/coverage.css",
     "/static/styles/history.css",
+    # The same assets are served at the web root for the document-relative
+    # URLs used by index.html.
+    "/app.js",
+    "/styles.css",
+    "/lib/api.js",
+    "/views/overview.js",
+    "/styles/overview.css",
 ])
 async def test_static_modules_are_served(client, path):
     response = await client.get(path)
@@ -73,8 +80,8 @@ async def test_static_serving_rejects_escapes_and_missing_files(client):
 
 async def test_index_references_served_entry_points(client):
     html = (await client.get("/")).text
-    assert 'src="/static/app.js"' in html
-    assert 'href="/styles.css"' in html
+    assert 'src="app.js"' in html
+    assert 'href="styles.css"' in html
     # CSP allows same-origin files only: every script must have a src and no
     # element may carry a style attribute.
     import re

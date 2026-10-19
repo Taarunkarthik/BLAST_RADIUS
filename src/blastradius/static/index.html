@@ -6,15 +6,17 @@
   <meta name="blastradius-token" content="__SESSION_TOKEN__">
   <title>BlastRadius · Repository health</title>
   <!-- All assets are same-origin files served by harness.py; CSP stays 'self'. -->
-  <link rel="stylesheet" href="/styles.css">
-  <link rel="stylesheet" href="/static/styles/overview.css">
-  <link rel="stylesheet" href="/static/styles/findings.css">
-  <link rel="stylesheet" href="/static/styles/map.css">
-  <link rel="stylesheet" href="/static/styles/dependencies.css">
-  <link rel="stylesheet" href="/static/styles/coverage.css">
-  <link rel="stylesheet" href="/static/styles/history.css">
-  <link rel="stylesheet" href="/static/styles/a11y.css">
-  <script type="module" src="/static/app.js"></script>
+  <!-- Document-relative URLs: correct when the page is served at "/", and
+       resolvable on disk so the repository's own HTML link check stays clean. -->
+  <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="styles/overview.css">
+  <link rel="stylesheet" href="styles/findings.css">
+  <link rel="stylesheet" href="styles/map.css">
+  <link rel="stylesheet" href="styles/dependencies.css">
+  <link rel="stylesheet" href="styles/coverage.css">
+  <link rel="stylesheet" href="styles/history.css">
+  <link rel="stylesheet" href="styles/a11y.css">
+  <script type="module" src="app.js"></script>
 </head>
 <body>
   <a class="skip-link" href="#main-content" id="skip-link">Skip to content</a>
