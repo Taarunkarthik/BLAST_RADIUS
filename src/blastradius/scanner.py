@@ -10,16 +10,30 @@ from uuid import uuid4
 
 from blastradius import __version__
 from blastradius.checkers import (
+    CheckerUnavailable,
     check_css_references,
+    check_dotenv,
     check_html,
+    check_ini,
     check_json,
+    check_mako,
     check_markdown,
+    check_python,
+    check_shell,
+    check_sql,
+    check_svg,
+    check_toml,
     check_yaml,
 )
 from blastradius.discovery import discover, route
 from blastradius.graph import DependencyGraph
 from blastradius.models import Issue
 from blastradius.worker import NodeWorker
+
+TEXT_CHECKERS = {
+    "toml": check_toml, "ini": check_ini, "svg": check_svg, "python": check_python,
+    "dotenv": check_dotenv, "shell": check_shell, "sql": check_sql, "mako": check_mako,
+}
 
 # Node parser requests are batched so peak memory stays near one batch instead of
 # the total source size; the worker reuses resolution caches across batches.
@@ -34,7 +48,8 @@ def scan_repository(root: Path, *, mode="all", deterministic=False, max_files=50
     if mode not in {"all", "health", "structure"}:
         raise ValueError("Unknown scan mode.")
     discovered = discover(root)
-    unsupported, excluded, skipped, checked = [], [], [], []
+    unsupported, excluded, skipped = [], [], []
+    checked: list[str] = []
     sources, node_files, issues, imports = {}, [], [], []
     ignored_imports, limitations, file_hashes = [], [], {}
     for item in discovered:
@@ -67,6 +82,15 @@ def scan_repository(root: Path, *, mode="all", deterministic=False, max_files=50
             reason = "file is not readable UTF-8 text" if isinstance(error, (UnicodeError, ValueError)) else "file could not be read"
             skipped.append({"file": item.path, "reason": reason})
             continue
+        if item.checker in TEXT_CHECKERS:
+            try:
+                issues.extend(TEXT_CHECKERS[item.checker](item.path, content))
+            except CheckerUnavailable:
+                unsupported.append(item.path)
+                continue
+            except OSError:
+                skipped.append({"file": item.path, "reason": "optional checker could not complete"})
+                continue
         checked.append(item.path)
         sources[item.path] = item.checker
         file_hashes[item.path] = hashlib.sha256(raw).hexdigest()
@@ -114,11 +138,11 @@ def scan_repository(root: Path, *, mode="all", deterministic=False, max_files=50
         else:
             checker = sources.get(issue.file) or route(issue.file)
             note = ("Tree analysis is disabled in health mode." if checker == "javascript"
-                    else f"{ {'jsonc': 'JSON configuration', 'css': 'CSS/SCSS'}.get(checker, str(checker).upper()) } files are outside the JS/TS dependency graph.")
+                    else f"{ {'jsonc': 'JSON configuration', 'css': 'CSS/SCSS'}.get(checker or '', str(checker).upper()) } files are outside the JS/TS dependency graph.")
             impact = {"has_tree_impact": False, "note": note}
         merged.append({**issue.to_dict(), "has_tree_impact": impact["has_tree_impact"], "impact": impact})
     counts = Counter(Path(file).suffix.lower() or "[no extension]" for file in unsupported)
-    report = {
+    report: dict = {
         "schema_version": 1,
         "tool_version": __version__,
         "scan": {

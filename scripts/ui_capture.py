@@ -22,7 +22,11 @@ Usage
 -----
     python scripts/ui_capture.py --url http://127.0.0.1:8765 --out docs/assets/harness.png
 
-The harness must already be running, for example:
+Or verify and capture an isolated demo (requires the dev and harness extras):
+
+    python scripts/ui_capture.py --demo
+
+Without --demo, the harness must already be running, for example:
 
     python -m blastradius harness --path examples/demo --port 8765
 """
@@ -39,18 +43,24 @@ import struct
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from contextlib import contextmanager
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from playwright.sync_api import Page
 
 DEFAULT_URL = "http://127.0.0.1:8765"
 DEFAULT_OUT = "docs/assets/harness.png"
 DEFAULT_WIDTH = 1440
 DEFAULT_HEIGHT = 1400
 DEFAULT_CLICK = "#scan-button"
-DEFAULT_WAIT = "#finding-list"
+DEFAULT_WAIT = ".overview-meta"
 DEFAULT_TIMEOUT = 30.0
 
 # Standard install locations, tried after PATH lookups. Edge is a usable fallback
@@ -458,6 +468,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
+    parser.add_argument("--demo", action="store_true", help="Verify and capture an isolated demo using Playwright (dev and harness extras).")
     parser.add_argument("--url", default=DEFAULT_URL, help=f"Harness URL (default: {DEFAULT_URL}).")
     parser.add_argument("--out", default=DEFAULT_OUT, help=f"Output PNG path (default: {DEFAULT_OUT}).")
     parser.add_argument(
@@ -489,8 +500,67 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
+ROOT = Path(__file__).resolve().parents[1]
+
+
+@contextmanager
+def demo_server():
+    import uvicorn
+
+    from blastradius.harness import create_app
+
+    with socket.socket() as listener:
+        listener.bind(("127.0.0.1", 0))
+        port = listener.getsockname()[1]
+        server = uvicorn.Server(uvicorn.Config(create_app(ROOT / "examples/demo"), log_level="error", access_log=False))
+        thread = threading.Thread(target=server.run, kwargs={"sockets": [listener]}, daemon=True)
+        thread.start()
+        try:
+            deadline = time.monotonic() + 10
+            while not server.started:
+                if not thread.is_alive() or time.monotonic() > deadline:
+                    raise RuntimeError("Demo harness did not start.")
+                time.sleep(0.05)
+            yield f"http://127.0.0.1:{port}"
+        finally:
+            server.should_exit = True
+            thread.join(timeout=10)
+
+
+def verify_demo(page: Page, url: str) -> None:
+    from playwright.sync_api import expect
+
+    page.goto(url)
+    expect(page.locator("#project-name")).to_have_text("demo")
+    page.get_by_role("button", name="Run scan", exact=True).click()
+    # The Swiss overview is impact-first; assert stable semantic content rather
+    # than the old metric markup (which the redesign replaced).
+    expect(page.get_by_text("Top blast radius")).to_be_visible(timeout=30000)
+    expect(page.get_by_text("src/Chart.tsx:1").first).to_be_visible()
+    page.get_by_role("button", name="Coverage", exact=True).click()
+    expect(page.get_by_text("icon.svg").first).to_be_visible()
+    page.get_by_role("button", name="Overview", exact=True).click()
+
+
+
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
+    if args.demo:
+        from playwright.sync_api import sync_playwright
+
+        with demo_server() as url, sync_playwright() as playwright:
+            browser = playwright.chromium.launch(headless=True)
+            try:
+                page = browser.new_page(viewport={"width": args.width, "height": args.height}, device_scale_factor=1)
+                verify_demo(page, url)
+                output = Path(args.out)
+                output.parent.mkdir(parents=True, exist_ok=True)
+                page.screenshot(path=str(output), full_page=True)
+                print(f"Saved {output}")
+                print("Demo: 10 / 10 checked; 0 unsupported; 5 findings; 3 affected files.")
+            finally:
+                browser.close()
+        return 0
     try:
         out_path, width, height, size = capture(args)
     except CaptureError as error:

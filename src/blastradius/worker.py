@@ -30,7 +30,7 @@ class NodeWorker:
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0,
         )
         self.timeout = timeout
-        self.responses = queue.Queue()
+        self.responses: queue.Queue[str | None] = queue.Queue()
         self.sequence = 0
         self.reader = threading.Thread(target=self._read, daemon=True)
         self.reader.start()
@@ -46,6 +46,7 @@ class NodeWorker:
         self.sequence += 1
         request = {"version": 1, "id": self.sequence, "method": method, "params": params}
         try:
+            assert self.process.stdin is not None
             self.process.stdin.write(json.dumps(request, ensure_ascii=True) + "\n")
             self.process.stdin.flush()
             line = self.responses.get(timeout=self.timeout)

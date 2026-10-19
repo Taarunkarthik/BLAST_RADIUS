@@ -9,6 +9,8 @@ ISSUE_TYPES = frozenset({
     "invalid_path", "unsupported_resolution", "parse_error", "invalid_css",
     "missing_css_import", "invalid_json", "broken_json_ref", "invalid_yaml",
     "tabs_in_yaml", "missing_asset", "broken_link", "version_mismatch",
+    "invalid_toml", "invalid_ini", "invalid_svg", "invalid_python", "invalid_dotenv",
+    "invalid_shell", "invalid_sql", "invalid_mako",
 })
 
 

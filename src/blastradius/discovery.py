@@ -7,6 +7,7 @@ from pathlib import Path
 
 from pathspec import GitIgnoreSpec
 
+from blastradius.checkers import available_bash, optional_parser
 from blastradius.models import JS_EXTENSIONS, is_declaration
 
 BUILTIN_DIRS = frozenset({
@@ -25,6 +26,13 @@ class DiscoveredFile:
 
 def route(path: str) -> str | None:
     suffix = Path(path).suffix.lower()
+    if Path(path).name.lower() in {".env", ".example"} or suffix in {".env", ".example"}:
+        return "dotenv"
+    if suffix == ".sh":
+        return "shell" if available_bash() else None
+    if suffix in {".sql", ".mako"}:
+        module, checker = ("sqlglot", "sql") if suffix == ".sql" else ("mako.lexer", "mako")
+        return checker if optional_parser(module) is not None else None
     if suffix in JS_EXTENSIONS:
         return "javascript"
     if suffix in {".css", ".scss"}:
@@ -34,7 +42,8 @@ def route(path: str) -> str | None:
         if name.startswith(("tsconfig", "jsconfig")) or ".vscode" in Path(path).parts:
             return "jsonc"
         return "json"
-    return {".yaml": "yaml", ".yml": "yaml", ".html": "html", ".md": "markdown"}.get(suffix)
+    return {".yaml": "yaml", ".yml": "yaml", ".html": "html", ".md": "markdown",
+            ".toml": "toml", ".ini": "ini", ".svg": "svg", ".py": "python"}.get(suffix)
 
 
 def discover(root: Path) -> list[DiscoveredFile]:

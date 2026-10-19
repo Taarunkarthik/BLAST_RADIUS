@@ -18,6 +18,9 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 import pytest
+from playwright.sync_api import expect, sync_playwright
+
+from scripts.ui_capture import demo_server, verify_demo
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 STATIC = REPO_ROOT / "src" / "blastradius" / "static"
@@ -187,3 +190,28 @@ def test_index_html_has_no_external_http_assets(index_scan: _AssetScan) -> None:
         if urlparse(value).scheme in {"http", "https"}
     ]
     assert not external, f"index.html references external URL(s): {', '.join(external)}"
+
+
+def test_demo_ui_coverage_and_finding_filters():
+    with sync_playwright() as playwright:
+        if not Path(playwright.chromium.executable_path).is_file():
+            pytest.skip("Install Chromium with: python -m playwright install chromium")
+        with demo_server() as url:
+            browser = playwright.chromium.launch(headless=True)
+            try:
+                page = browser.new_page()
+                errors = []
+                page.on("pageerror", lambda error: errors.append(str(error)))
+                verify_demo(page, url)
+                page.locator('[data-view="findings"]').click()
+                page.get_by_role("textbox", name="Search findings").fill("styles")
+                expect(page.locator("#findings-count")).to_contain_text("01")
+                expect(page.locator(".detail-panel")).to_contain_text("No tree impact")
+                page.get_by_role("textbox", name="Search findings").fill("")
+                page.get_by_role("combobox", name="Filter severity").select_option("high")
+                expect(page.locator("#findings-count")).to_contain_text("01")
+                expect(page.locator(".detail-panel")).to_contain_text("src/Chart.tsx")
+                expect(page.locator(".detail-panel")).to_contain_text("3 affected")
+                assert errors == []
+            finally:
+                browser.close()

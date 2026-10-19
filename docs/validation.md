@@ -1,12 +1,16 @@
 # Validation results
 
-Measured on 18 October 2026. These results describe the checked fixtures and hosts, not universal accuracy or performance guarantees. The timings and counts below are dated, host- and fixture-coupled snapshots; regenerate them with `scripts/benchmark.py`, `scripts/scale_benchmark.py`, `scripts/accuracy.py`, and `blastradius scan --path examples/demo`. None of them are enforced as CI gates.
+Original benchmark measurements: 18 October 2026. File-checker extension: 19 October 2026. These results describe the checked fixtures and hosts, not universal accuracy or performance guarantees.
 
 ## Automated checks
 
 The suite covers deterministic output, read-only scans, ignore rules, parser failures, resolver configurations, JS grammar, shadowed CommonJS imports, coverage accounting, cycles, deep paths, comparison uncertainty, database transactions, and the harness API.
 
-Local Windows result (re-measured 19 October 2026): **90 passed, 8 skipped**. The count is host-dependent: on a host that permits symlink creation, the two symlink tests (`tests/test_discovery.py`, `tests/test_harness.py`) also run, giving **92 passed, 6 skipped**. The eight skips are the two symlink tests plus the six PostgreSQL integration tests; the database tests run in the database CI job. The harness tests drive the app through httpx's ASGI transport directly, so no Starlette TestClient adapter is involved.
+Local Windows baseline before the language-checker extension (19 October 2026): **90 passed, 8 skipped**. The count is host-dependent: on a host that permits symlink creation, the two symlink tests (`tests/test_discovery.py`, `tests/test_harness.py`) also run, giving **92 passed, 6 skipped**. The eight skips are the two symlink tests plus the six PostgreSQL integration tests; the database tests run in the database CI job. The harness tests drive the app through httpx's ASGI transport directly, so no Starlette TestClient adapter is involved.
+
+The combined language-checker, UI, and scanner result on 19 October 2026 is **178 passed, 6 PostgreSQL tests skipped**, with **79.24% line coverage** (75% required). Ruff, `mypy src`, and `mypy src --platform linux` pass. The venv reports Python **3.12.10**. SQLGlot and Mako were installed through the optional `languages` extra; Git Bash was placed first on PATH only for verification processes. The suite covers valid/invalid syntax, read-only checks, byte limits, missing optional dependencies, and a live Chromium demo scan. The screenshot was regenerated with `scripts/ui_capture.py --demo`.
+
+The repository self-scan exits **0**, with **69 / 75 files checked and zero findings**. Its six unsupported files are one PNG, one TXT, and four extensionless files. The checker extension adds no ignore rules or intentionally broken demo files. The separate valid/invalid fixture scan checks **18 / 18 files** and reports nine expected medium findings across the eight new issue types, without modifying its inputs.
 
 CI runs twelve OS/Python combinations: Windows, Linux, and macOS with Python 3.11, 3.12, 3.13, and 3.14. Each job runs lint, type checks, tests, a coverage gate, the accuracy corpus, a zero-finding self-scan, builds, wheel-content checks, and a clean wheel installation. A thirteenth job runs against PostgreSQL 17, including actual save/load/rollback and CLI/harness comparison flows. Database tests skip locally when `BLASTRADIUS_TEST_DATABASE_URL` is absent. Follow [GitHub Actions](https://github.com/Taarunkarthik/BLAST_RADIUS/actions) for per-commit results.
 
@@ -17,7 +21,7 @@ Run `python scripts/accuracy.py` after `blastradius setup`.
 | Case | Files checked | Expected diagnostics found | Unexpected | Missed |
 | --- | ---: | ---: | ---: | ---: |
 | Workspace UI fixture | 8 | 2 | 0 | 0 |
-| Configuration and documentation fixture | 9 | 5 | 0 | 0 |
+| Configuration and documentation fixture | 10 | 5 | 0 | 0 |
 | CommonJS library fixture | 7 | 1 | 0 | 0 |
 | Published semver 7.8.5 source, structure mode | 49 | 0 | 0 | 0 |
 | Same package with two injected failures | 49 | 2 | 0 | 0 |
@@ -42,8 +46,8 @@ These are graph timings, not full scans; allocation peaks are not whole-process 
 
 ## Browser verification
 
-The local demo was exercised through the browser: full and health scans, severity and search filters, finding selection, direct/transitive impact, No Tree Impact, coverage, and the unconfigured saved-history state. The demo shows five findings, nine checked files, one unsupported SVG, and three unique affected JS/TS files in full mode. These demo counts are a dated snapshot regenerated with `blastradius scan --path examples/demo`; they are not enforced as a CI gate. Automated HTTP tests cover loopback/host/origin/session guards, scan boundaries, body limits, concurrent scans, stale report IDs, and read-only behavior. The PostgreSQL CI job verifies the harness save/history/compare API against a real database; the development machine does not have a running PostgreSQL service.
+The local demo was exercised through the browser: full and health scans, severity and search filters, finding selection, direct/transitive impact, No Tree Impact, coverage, and the unconfigured saved-history state. With SVG checking enabled, the demo shows **five findings, 10 / 10 checked files, 0 unsupported files**, and three unique affected JS/TS files in full mode. Automated HTTP tests cover loopback/host/origin/session guards, scan boundaries, body limits, concurrent scans, stale report IDs, and read-only behavior. `tests/test_ui.py` verifies the live demo's counts, coverage, and filters in Chromium; `scripts/ui_capture.py` regenerates the documentation screenshot. The PostgreSQL CI job verifies the harness save/history/compare API against a real database; the development machine does not have a running PostgreSQL service.
 
 ## Scope boundaries
 
-The checks do not establish semantic type correctness, runtime correctness, CSS value validity, remote-link health, HTML/Markdown fragment existence, custom Sass load paths, or nested JSON Schema `$id` behavior. Python/Go/Rust analyzers and remediation are future scope. See [the tracked phases](PHASES.md).
+The checks do not establish semantic type correctness, runtime correctness, CSS value validity, remote-link health, HTML/Markdown fragment existence, custom Sass load paths, or nested JSON Schema `$id` behavior. Python syntax is checked, but Python dependency analysis, Go/Rust analyzers, and remediation remain future scope. See [the tracked phases](PHASES.md).
