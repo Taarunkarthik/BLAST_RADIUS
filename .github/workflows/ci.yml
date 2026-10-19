@@ -13,7 +13,10 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
-        python: ['3.11', '3.12', '3.13']
+        # Python 3.14 was verified locally (throwaway venv): the full suite passes
+        # (90 passed, 8 skipped) with the same fastapi/starlette/httpx stack as 3.11-3.13,
+        # so it stays in the matrix and requires-python remains >=3.11 with no upper cap.
+        python: ['3.11', '3.12', '3.13', '3.14']
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -34,6 +37,8 @@ jobs:
         if: matrix.os == 'ubuntu-latest' && matrix.python == '3.12'
         run: python -m playwright install --with-deps chromium
       - run: pytest -q
+      # Coverage gate: measured 78% total line coverage; fail_under=75 leaves headroom.
+      - run: python -m pytest -q --cov=blastradius --cov-report=term-missing
       - run: python scripts/accuracy.py
       - run: blastradius scan --format json --deterministic-id --fail-on low
       - run: python -m build

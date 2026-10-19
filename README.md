@@ -1,10 +1,69 @@
 # BlastRadius
 
-**What is broken in this repository, and what depends on it?**
+[![CI](https://github.com/Taarunkarthik/BLAST_RADIUS/actions/workflows/ci.yml/badge.svg)](https://github.com/Taarunkarthik/BLAST_RADIUS/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+![Python](https://img.shields.io/badge/python-3.11%20%7C%203.12%20%7C%203.13%20%7C%203.14-blue)
 
-BlastRadius is a local-first CLI that combines file health checks with JavaScript and TypeScript dependency impact. It reports diagnostics, affected files, and dependency paths. Scans are read-only and work offline after installation.
+> **What's broken in this repository — and how far does the damage spread?**
 
-## Install
+BlastRadius is a local-first CLI that checks every file it can read and traces how a broken
+JavaScript/TypeScript file ripples through the dependency graph. It answers both questions in one
+pass, honestly reports what it did *not* check, and never suggests or applies a fix.
+
+Read-only. Offline after setup. Deterministic. No code execution, no network calls during a scan.
+
+![BlastRadius harness Overview dashboard after a full scan of the demo project](docs/assets/harness.png)
+
+## The problem
+
+Today you reach for ESLint, Stylelint, a JSON linter, and a separate graph tool — and none of them
+tell you *what depends on the thing that just broke*. BlastRadius does both in a single scan: it
+flags the broken file and shows exactly which files it takes down.
+
+## See it work
+
+One undeclared import in `examples/demo` takes down three files:
+
+```text
+$ blastradius scan --path examples/demo
+
+BlastRadius Scan - .
+Files checked: 10 / 10 (0 not checked)
+
+BROKEN (5 issues)
+  HIGH (1)
+  src/Chart.tsx:1  undeclared_external_package  chart-helper
+
+TREE IMPACT (how each break propagates)
+src/Chart.tsx:1 (undeclared_external_package: chart-helper)
+  Impact: HIGH - 3 affected / 4 eligible files (75.0%)
+src/Chart.tsx
++-- src/Dashboard.tsx (direct)
+|   `-- src/App.tsx (transitive, distance 2)
+`-- src/Grid.tsx (direct)
+```
+
+The same report also catches a missing CSS import, a broken JSON reference, a missing HTML asset,
+and a dead Markdown link — each explicitly tagged **No Tree Impact**, because it is outside the
+JS/TS graph.
+
+## What it does
+
+- **Checks every file type it knows:** JS/TS, CSS/SCSS, JSON, YAML, HTML, Markdown, TOML, INI, SVG, Python, and dotenv; optional Bash, SQL, and Mako syntax checks.
+- **Builds a real dependency graph** for JS/TS and computes the reverse-dependency *blast radius* —
+  affected files, direct vs. transitive, and one shortest path each.
+- **Shows it all in a browser:** the optional local harness renders an Overview dashboard with a
+  severity donut and top-blast-radius ranking, a searchable findings list with collapsible
+  tree-impact detail, a filesystem **Map** of the component tree, and an interactive SVG
+  dependency graph — still local and read-only.
+- **Uses the real resolver:** nearest `tsconfig`/`jsconfig`, path mappings, package exports, and the
+  nearest `package.json` — so aliases and workspaces resolve like your bundler does.
+- **Tells the truth about coverage:** unsupported files, size/limit skips, unresolved imports, and
+  partial scans are all listed, never hidden.
+- **Is deterministic:** `--deterministic-id` produces byte-identical reports, so CI can diff them.
+- **Never fixes anything:** it is a diagnostic scanner. No suggestions, no patches, no surprises.
+
+## Try it in 60 seconds
 
 Requirements: Python 3.11+ and Node.js 20+ with npm.
 
@@ -12,77 +71,30 @@ Requirements: Python 3.11+ and Node.js 20+ with npm.
 git clone https://github.com/Taarunkarthik/BLAST_RADIUS.git
 cd BLAST_RADIUS
 python -m venv .venv
-```
-
-Activate the environment:
-
-```powershell
-# Windows PowerShell
-.\.venv\Scripts\Activate.ps1
-```
-
-```sh
-# macOS / Linux
-source .venv/bin/activate
-```
-
-Install the CLI and the pinned parser dependencies:
-
-```sh
-python -m pip install -e ".[dev,harness,postgres]"
-blastradius setup
-```
-
-`setup` is the explicit installation step that contacts npm. It uses the checked-in lockfile and disables install scripts. Ordinary scans never install packages, fetch URLs, run project code, or change target files. `scan --save` explicitly connects to the configured PostgreSQL store.
-
-For a built wheel, install it with `pip install path/to/blastradius-0.1.0-py3-none-any.whl`, then run `blastradius setup` in that Python environment.
-
-For a minimal CLI installation, use `pip install -e .`; the database and browser dependencies are optional.
-
-## Open the local browser interface
-
-```sh
-blastradius harness --path examples/demo
-```
-
-Open the printed local address, normally [localhost:8765](http://127.0.0.1:8765), and choose **Run scan**. The interface includes searchable findings, severity filters, dependency paths, coverage details, and JSON export. Use `--path /path/to/repository` for your own project. Saved history and comparison use the optional PostgreSQL configuration.
-
-See [the harness guide](docs/harness.md) and [saved scans and comparison](docs/persistence.md).
-
-## Scan
-
-```sh
-blastradius scan --path /path/to/repository
-blastradius scan --path /path/to/repository --format json --deterministic-id
-blastradius scan --mode structure
-blastradius scan --mode health
-blastradius --format json --fail-on medium scan --path /path/to/repository
-```
-
-Global output flags also work after `scan`. `--logs` writes file coverage to stderr, keeping JSON stdout parseable.
-
-| Mode | File checks | JS/TS dependency graph |
-| --- | --- | --- |
-| `all` (default) | All configured checkers | Yes |
-| `structure` | JS/TS syntax and imports | Yes |
-| `health` | All configured checkers | No |
-
-### Try the broken demo
-
-```sh
+source .venv/bin/activate        # Windows PowerShell: .\.venv\Scripts\Activate.ps1
+python -m pip install -e ".[harness]"
+blastradius setup                # one-time; after this, scans work offline
 blastradius scan --path examples/demo --deterministic-id
 ```
 
-The command intentionally exits with code 1. Its missing `chart-helper` package affects three dependent files:
+Prefer a UI? Open the local browser harness:
 
-```text
-src/Chart.tsx
-├── src/Dashboard.tsx (direct)
-│   └── src/App.tsx (transitive, distance 2)
-└── src/Grid.tsx (direct)
+```sh
+blastradius harness --path examples/demo   # then open http://127.0.0.1:8765
 ```
 
-The same report includes a missing CSS import, JSON reference, HTML asset, and Markdown link. Its valid SVG is also checked: **10 / 10 files checked, 0 unsupported**, with the same five findings. The demo is excluded when scanning the project itself.
+## Scan your own project
+
+```sh
+blastradius scan --path /path/to/repo                       # text report
+blastradius scan --path /path/to/repo --mode structure      # graph/impact only
+blastradius scan --path /path/to/repo --mode health         # file checks only
+blastradius scan --path /path/to/repo --format json --deterministic-id
+blastradius --format json --fail-on medium scan --path .    # CI gate
+```
+
+Exit codes make it a drop-in CI check: `0` clean · `1` findings at/above the threshold (`high` by
+default) · `2` bad invocation or parser failure · `3` incomplete scan (takes precedence).
 
 ## Checks and coverage
 
@@ -104,7 +116,7 @@ The same report includes a missing CSS import, JSON reference, HTML asset, and M
 | SQL (`.sql`, optional) | SQLGlot parser diagnostics in its generic dialect; no database access |
 | Mako (`.mako`, optional) | Lexer/parser syntax checks; never compile/render a template or execute its Python |
 
-All these additional findings have **medium** severity and **No Tree Impact**. Install the optional SQL/Mako parsers with `python -m pip install -e ".[languages]"`; they are not core dependencies. Missing optional parsers leave their file types unsupported, without findings. Shell checks need an actual Bash executable on PATH; Windows' legacy WSL launcher is not accepted as Bash. Unavailable shells stay unsupported, while a running check that times out is disclosed as incomplete coverage.
+The new TOML, INI, SVG, Python, dotenv, Shell, SQL, and Mako findings have **medium** severity and **No Tree Impact**. Install the optional SQL/Mako parsers with `python -m pip install -e ".[languages]"`; they are not core dependencies. Missing optional parsers leave their file types unsupported, without findings. Shell checks need an actual Bash executable on PATH; Windows' legacy WSL launcher is not accepted as Bash. Unavailable shells stay unsupported, while a running check that times out is disclosed as incomplete coverage.
 
 These are syntax checks, not proof that a program, query, or template is correct. Python syntax follows the scanner's interpreter version. SQLGlot accepts a broad syntax superset and may accept statements a particular database would reject. Dotenv checks are deliberately line-based and do not parse multiline quoted values. Existing ignore rules still apply to `.env` files. `.lock`, `.png`, `.template`, `.vercel`, and extensionless files remain unsupported.
 
@@ -127,43 +139,61 @@ By default a scan checks up to 5,000 eligible files, each up to 2 MB. Increase t
 
 `--fail-on none` disables finding-based failure, but still reports incomplete scans as code 3. A parse error is a diagnostic and can also make the graph partial; its high severity determines finding-based failure. Unsupported file types alone do not make a configured scan incomplete.
 
-## Determinism and graph semantics
 
-`--deterministic-id` removes timestamps and the absolute scan root, sorts report records, fixes text width, and hashes the report plus checked file contents. Repeated scans of unchanged inputs and dependency state produce identical reports. Redirect report output outside the target directory to avoid including the previous report in the next scan.
+## Why the output is trustworthy
 
-Edges point from importer to dependency. A broken source file propagates through the reverse graph. Counts are unique, exclude the failing file, and use checked JS/TS source files as the eligible denominator. Each affected file has one deterministic shortest path; cycles cannot duplicate counts. A file with zero dependents is a graph root, not necessarily an application entry point.
+- **Read-only and local.** Scans never install packages, fetch URLs, run your code, or modify files.
+  The only networked step is the explicit one-time `blastradius setup`.
+- **Deterministic.** No timestamps or absolute paths in deterministic mode; identical inputs produce
+  identical reports, down to the scan ID.
+- **Honest.** Coverage is partitioned and disclosed, root-node failures are labelled as graph
+  properties (not proof of a runtime entry point), and partial scans never claim a finding was
+  resolved.
+- **Measured.** CI runs a pinned real-package accuracy corpus (zero unexpected or missed diagnostics
+  in the reviewed corpus) alongside unit, integration, and scale tests.
 
-## Architecture
+## How it works
 
 ```text
 Python CLI -> deterministic walker -> file router
-                                   |-- TypeScript / PostCSS worker (NDJSON v1)
-                                   |-- Python file-health and optional language checks
+                                   |-- TypeScript / PostCSS worker (NDJSON v1, persistent)
+                                   |-- Python static file checks + optional language parsers
                                    |-- independent dependency graph
                                    `-- report merger -> Rich text / stable JSON
 ```
 
-The Node subprocess stays alive for the scan and shares TypeScript resolution caches across files. TypeScript uses the nearest tsconfig/jsconfig, path mappings, package exports, and nearest package manifest. Bundler resolution is the default when a project has no compiler configuration. Built-ins, declaration-only targets, and non-source imports are excluded from graph propagation.
+The file checkers and the dependency graph run independently; the report merges them without
+mutating either. TypeScript resolution happens in a long-lived Node subprocess that shares caches
+across the scan.
 
-Read [the implementation phases and status](docs/PHASES.md), [the implementation decisions](docs/implementation-decisions.md), [the report contract](docs/report-contract.md), and [the supplied v3.0 PRD](docs/product-requirements-v3.txt).
+## Full reference
 
-## Limits of this release
+- [Implementation phases and status](docs/PHASES.md)
+- [Implementation decisions](docs/implementation-decisions.md)
+- [Report and worker contract](docs/report-contract.md)
+- [Saved scans and comparison (optional PostgreSQL)](docs/persistence.md)
+- [Local browser harness](docs/harness.md)
+- [Validation results and their limits](docs/validation.md)
+- [Product requirements (v3.0)](docs/product-requirements-v3.txt)
 
-This is a static diagnostic MVP. It does not run a type checker, compile Sass, validate CSS property values, execute bundler configuration, or prove runtime behavior. Computed JS imports and custom bundler resolvers may leave partial coverage. Sass package load paths and interpolation are not resolved. Remote links are not requested; HTML/Markdown anchor fragments are not validated. JSON references use filesystem-relative paths; nested JSON Schema `$id` rebasing is not implemented.
-
-All seven implementation phases are delivered, including the optional PostgreSQL store and FastAPI browser harness. Python now has syntax checks; Python dependency analysis and Go/Rust checks remain future scope. The remaining coverage extensions are listed explicitly in [the phases document](docs/PHASES.md).
+**Limits:** this is a static diagnostic MVP — it does not type-check, compile Sass, validate CSS
+property values, or prove runtime behavior. Full scope boundaries are in
+[the phases document](docs/PHASES.md).
 
 ## Development
 
 ```sh
+pip install -e ".[dev,harness,languages]"
 ruff check src tests scripts
 python -m mypy src
 python -m mypy src --platform linux
 pytest -q
-python -m build
-python scripts/benchmark.py --files 1000
 python scripts/accuracy.py
-python scripts/scale_benchmark.py
 ```
 
-CI runs on Linux, Windows, and macOS with Python 3.11, 3.12, and 3.13. A separate PostgreSQL 17 job verifies real database transactions and CLI/browser API workflows. CI checks lint, mypy, tests with the optional language parsers, accuracy fixtures, a scan of this repository, wheel contents, and a clean wheel installation. The Ubuntu/Python 3.12 job also installs Chromium for the browser test. See [validation results and their limits](docs/validation.md). Benchmarks use temporary repositories; timings depend on the host and are not a CI timing gate.
+CI runs Linux, Windows, and macOS across Python 3.11–3.14, plus a PostgreSQL 17 job that exercises
+real save/compare workflows and the harness API. The Ubuntu/Python 3.12 job also installs Chromium for the live demo coverage test.
+
+## License
+
+MIT — see [LICENSE](LICENSE). Release history is in [CHANGELOG.md](CHANGELOG.md).

@@ -58,6 +58,8 @@ All seven implementation phases from section 15 of the [v3.0 PRD](product-requir
 - [x] YAML syntax and indentation tabs.
 - [x] HTML local assets/pages, base URLs, source sets.
 - [x] Markdown links, images, reference links, embedded HTML.
+- [x] TOML, INI, SVG, Python, and dotenv syntax checks.
+- [x] Optional Bash, SQLGlot, and Mako syntax checks, with unsupported coverage when unavailable.
 
 **Acceptance:** tested local failures have the expected issue type, location, severity, and `has_tree_impact: false`. Remote references are not fetched.
 
@@ -82,8 +84,9 @@ All seven implementation phases from section 15 of the [v3.0 PRD](product-requir
 - [x] Read-only behavior, cycles, scan modes, bounds, deterministic output.
 - [x] 5,002-file cap test and deeper/denser/wider graph checks.
 - [x] Synthetic 1,000-file scan and graph timing/allocation benchmarks.
-- [x] Windows, Linux, macOS CI across Python 3.11–3.13, plus PostgreSQL 17 integration.
+- [x] Windows, Linux, macOS CI across Python 3.11–3.14, plus PostgreSQL 17 integration.
 - [x] Wheel/source builds, bundled SQL/static assets, clean wheel install checks.
+- [x] mypy type checking and a 75% coverage floor enforced in CI.
 - [x] Installation, persistence, harness, contract, validation docs and broken demo.
 
 **Acceptance:** known regressions are closed, measurements are reproducible, and claims stay within the tested corpus and hosts. Database integration tests execute in CI. Current local results, performance, and accuracy figures are detailed in [validation.md](validation.md).

@@ -48,8 +48,9 @@ def route(path: str) -> str | None:
 
 def discover(root: Path) -> list[DiscoveredFile]:
     files = []
-
-    def walk(directory, inherited):
+    stack = [(root, [])]
+    while stack:
+        directory, inherited = stack.pop()
         rules = list(inherited)
         for name in (".gitignore", ".repohealthignore"):
             ignore = directory / name
@@ -57,6 +58,7 @@ def discover(root: Path) -> list[DiscoveredFile]:
                 rules.append((directory, GitIgnoreSpec.from_lines(ignore.read_text(encoding="utf-8-sig").splitlines())))
         with os.scandir(directory) as entries:
             ordered = sorted(entries, key=lambda entry: entry.name)
+        subdirectories = []
         for entry in ordered:
             path = Path(entry.path)
             rel = path.relative_to(root).as_posix()
@@ -75,12 +77,11 @@ def discover(root: Path) -> list[DiscoveredFile]:
             if entry.is_symlink() or junction:
                 files.append(DiscoveredFile(rel, route(rel), "symbolic link or junction"))
             elif is_dir:
-                walk(path, rules)
+                subdirectories.append((path, rules))
             elif entry.is_file(follow_symlinks=False):
                 files.append(DiscoveredFile(rel, route(rel), "type declaration" if is_declaration(rel) else None))
             else:
                 files.append(DiscoveredFile(rel, route(rel), "non-regular file"))
-
-    walk(root, [])
+        stack.extend(subdirectories)
     return sorted(files, key=lambda file: file.path)
 

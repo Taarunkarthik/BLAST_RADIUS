@@ -179,6 +179,27 @@ def test_json_local_cycle_does_not_recurse(repository):
     assert not check_json(root, "schema.json", '{"$ref":"#"}')
 
 
+def test_json_ref_text_inside_string_value_is_not_a_finding(repository):
+    root = repository({})
+    content = '{\n  "note": "use $ref here",\n  "$ref": "missing.json"\n}'
+    issues = check_json(root, "schema.json", content)
+    assert [(issue.line, issue.target) for issue in issues] == [(3, "missing.json")]
+
+
+def test_json_ref_lookalike_with_colon_inside_string_value_is_not_a_finding(repository):
+    root = repository({})
+    content = '{"note": "say \\"$ref\\": \\"fake.json\\" ok", "$ref": "missing.json"}'
+    issues = check_json(root, "schema.json", content)
+    assert [(issue.line, issue.target) for issue in issues] == [(1, "missing.json")]
+
+
+def test_json_reference_validation_cap_is_configurable(repository):
+    root = repository({"big.json": {"x": 1, "pad": "xxxxxx"}})
+    content = '{"$ref":"big.json#/x"}'
+    assert check_json(root, "schema.json", content, max_ref_bytes=10)
+    assert not check_json(root, "schema.json", content, max_ref_bytes=1_000_000)
+
+
 def test_yaml_multidoc_custom_tags_and_aliases_are_inert():
     assert not check_yaml("ci.yaml", 'a: !Custom value\n---\nb: &b [*b]\n')
     assert not check_yaml("ci.yaml", '!!python/object/apply:os.system ["must-not-run"]')

@@ -72,6 +72,7 @@ def scan(
     logs: Annotated[bool, typer.Option(help="Write per-file coverage to stderr.")] = False,
     max_files: Annotated[int, typer.Option(min=1, help="Maximum eligible files to check; excess is reported.")] = 5000,
     max_bytes: Annotated[int, typer.Option(min=1, help="Maximum bytes per checked file.")] = 2_000_000,
+    timeout: Annotated[int, typer.Option(min=1, help="Seconds to wait for a parser worker response.")] = 60,
     save: Annotated[bool, typer.Option(help="Save to PostgreSQL; the scan root must be registered.")] = False,
     project: Annotated[str | None, typer.Option(help="Require this registered project ID when saving.")] = None,
 ):
@@ -86,7 +87,7 @@ def scan(
         store = ScanStore() if save else None
         if store:
             store.match_project(path, project)
-        report = scan_repository(path, mode=mode.value, deterministic=deterministic, max_files=max_files, max_bytes=max_bytes)
+        report = scan_repository(path, mode=mode.value, deterministic=deterministic, max_files=max_files, max_bytes=max_bytes, worker_timeout=timeout)
         if store:
             report = {**report, "storage": store.save(report, path, project_id=project)}
     except (OSError, ValueError, WorkerError, StoreError, RecursionError) as error:

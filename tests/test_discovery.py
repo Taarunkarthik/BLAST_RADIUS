@@ -1,5 +1,6 @@
 import os
 import subprocess
+import sys
 
 import pytest
 
@@ -55,6 +56,24 @@ def test_symlinks_are_not_followed(repository, tmp_path):
     files = discover(root)
     assert len(files) == 2
     assert next(item for item in files if item.path == "loop").skip_reason
+
+
+def test_deep_tree_does_not_recursion_error(repository):
+    # Short names keep the full path well under Windows MAX_PATH while the depth
+    # still exceeds the deliberately lowered recursion limit.
+    depth = 60
+    chain = "/".join(["d"] * depth)
+    root = repository({f"{chain}/leaf.ts": "export {};", "shallow.ts": ""})
+    limit = sys.getrecursionlimit()
+    sys.setrecursionlimit(50)
+    try:
+        files = {file.path: file for file in discover(root)}
+    finally:
+        sys.setrecursionlimit(limit)
+    expected = f"{chain}/leaf.ts"
+    assert expected in files
+    assert files[expected].checker == "javascript"
+    assert files["shallow.ts"].checker == "javascript"
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows junction behavior")

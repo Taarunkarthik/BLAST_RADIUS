@@ -1,0 +1,337 @@
+/* Dependencies view — SVG graph, node index, import/imported-by tables. */
+
+.deps-panel {
+  margin-top: 18px;
+}
+
+.deps-banner {
+  padding: 10px 22px;
+  border-bottom: 1px solid var(--warn-border);
+  background: var(--warn-bg);
+  color: var(--medium);
+  font-size: 11px;
+}
+
+.deps-controls {
+  display: flex;
+  gap: 14px;
+  align-items: center;
+  flex-wrap: wrap;
+  padding: 14px 22px;
+  border-bottom: 1px solid var(--line);
+}
+
+.deps-search {
+  flex: 1;
+  min-width: 220px;
+  font-size: 11px;
+}
+
+.deps-zoom {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.deps-zoom-range {
+  width: 110px;
+}
+
+.deps-zoom-value {
+  font-size: 10px;
+  color: var(--muted);
+  min-width: 38px;
+  text-align: right;
+}
+
+.deps-canvas-scroll {
+  overflow: auto;
+  max-height: 560px;
+  max-width: 100%;
+  border-bottom: 1px solid var(--line);
+  overscroll-behavior: contain;
+  background:
+    radial-gradient(circle at 30% 20%, var(--graph-glow) 0%, transparent 55%),
+    var(--graph-bg);
+}
+
+.deps-canvas {
+  display: block;
+}
+
+.deps-edge {
+  fill: none;
+  stroke: var(--edge);
+  stroke-width: 1;
+  opacity: 0.6;
+}
+
+.deps-edge.radius {
+  stroke: var(--edge-radius);
+  opacity: 0.8;
+}
+
+.deps-edge.hot {
+  stroke: var(--accent);
+  stroke-width: 1.6;
+  opacity: 0.95;
+}
+
+.deps-arrowhead {
+  fill: var(--faint);
+}
+
+.deps-arrowhead.hot {
+  fill: var(--accent);
+}
+
+.deps-node {
+  cursor: pointer;
+}
+
+.deps-shape {
+  stroke: var(--graph-bg);
+  stroke-width: 1.5;
+  transition: fill var(--dur) var(--ease);
+}
+
+.deps-shape.file {
+  fill: var(--node-file);
+}
+
+.deps-shape.package {
+  fill: var(--medium);
+}
+
+.deps-shape.unresolved {
+  fill: var(--high);
+}
+
+.deps-node:hover .deps-shape {
+  fill: var(--text);
+}
+
+.deps-node.focus .deps-shape {
+  fill: var(--accent);
+  stroke: var(--node-focus-stroke);
+  stroke-width: 2.5;
+}
+
+.deps-node.direct .deps-shape {
+  fill: var(--node-direct);
+}
+
+.deps-node.affected .deps-shape {
+  fill: var(--node-affected);
+}
+
+.deps-node.dimmed {
+  opacity: 0.35;
+}
+
+.deps-label {
+  fill: var(--muted);
+  font-family: var(--mono);
+  font-size: 9px;
+  pointer-events: none;
+}
+
+.deps-node.focus .deps-label {
+  fill: var(--text);
+}
+
+.deps-legend {
+  display: flex;
+  gap: 18px;
+  align-items: center;
+  flex-wrap: wrap;
+  padding: 10px 22px;
+  border-bottom: 1px solid var(--line);
+  font-size: 10px;
+  color: var(--muted);
+}
+
+.deps-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.deps-legend-swatch {
+  width: 16px;
+  height: 16px;
+}
+
+.deps-body {
+  display: grid;
+  grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr);
+  gap: 0;
+}
+
+.deps-index {
+  padding: 20px 22px;
+  border-right: 1px solid var(--line);
+  min-width: 0;
+}
+
+.deps-index-list {
+  max-height: 560px;
+  overflow: auto;
+}
+
+.deps-list {
+  list-style: none;
+  margin: 12px 0 0;
+  padding: 0;
+}
+
+.deps-link {
+  display: flex;
+  width: 100%;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  text-align: left;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  color: var(--text);
+  font-size: 11px;
+  padding: 8px 10px;
+}
+
+.deps-link:hover {
+  background: var(--hover-bg-soft);
+}
+
+.deps-link.selected {
+  background: var(--selected-bg);
+  border-color: var(--selected-line);
+}
+
+.deps-link .mono {
+  overflow-wrap: anywhere;
+}
+
+.deps-link .muted {
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  white-space: nowrap;
+}
+
+.deps-detail {
+  padding: 20px 22px;
+  min-width: 0;
+}
+
+.deps-focus {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 14px;
+  overflow-wrap: anywhere;
+}
+
+.deps-focus strong {
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.deps-facts {
+  display: flex;
+  gap: 26px;
+  flex-wrap: wrap;
+  margin-bottom: 4px;
+}
+
+.deps-facts > div {
+  min-width: 62px;
+}
+
+.deps-facts strong {
+  display: block;
+  font-size: 20px;
+  font-weight: 500;
+  line-height: 1.3;
+}
+
+.deps-facts span {
+  font-size: 10px;
+  color: var(--muted);
+}
+
+.deps-block {
+  border-top: 1px solid var(--line);
+  padding-top: 14px;
+  margin-top: 14px;
+}
+
+.deps-block h3 {
+  margin-bottom: 4px;
+}
+
+.deps-block .note {
+  margin: 0 0 6px;
+}
+
+@media (max-width: 1150px) {
+  .deps-body {
+    grid-template-columns: 1fr;
+  }
+
+  .deps-index {
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+  }
+}
+
+/* Narrow screens: let the SVG scroll inside its own box and stack the
+   controls so nothing overflows the panel. */
+@media (max-width: 760px) {
+  .deps-controls {
+    gap: 10px;
+    padding: 12px 16px;
+  }
+
+  .deps-search {
+    flex-basis: 100%;
+    min-width: 0;
+  }
+
+  .deps-zoom {
+    flex: 1;
+  }
+
+  .deps-legend {
+    gap: 12px;
+    padding: 10px 16px;
+  }
+
+  .deps-canvas-scroll {
+    max-height: 420px;
+  }
+
+  .deps-index,
+  .deps-detail {
+    padding: 16px;
+  }
+
+  .deps-index-list {
+    max-height: 320px;
+  }
+}
+
+@media (max-width: 520px) {
+  .deps-zoom-range {
+    width: 76px;
+  }
+
+  .deps-legend-item {
+    font-size: 9px;
+  }
+
+  .deps-facts {
+    gap: 18px;
+  }
+}

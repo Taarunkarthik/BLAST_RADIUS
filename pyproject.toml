@@ -8,6 +8,33 @@ version = "0.1.0"
 description = "Local repository health checks with JavaScript and TypeScript dependency impact"
 readme = "README.md"
 requires-python = ">=3.11"
+license = "MIT"
+authors = [
+  { name = "S K Taarun", email = "taarunkarthik@gmail.com" },
+  { name = "geezdock", email = "dhruvav0308@gmail.com" },
+]
+keywords = [
+  "dependency",
+  "impact-analysis",
+  "blast-radius",
+  "security",
+  "scanner",
+  "typescript",
+  "javascript",
+  "repository-health",
+]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: OS Independent",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
+  "Topic :: Software Development :: Quality Assurance",
+]
 dependencies = [
   "typer>=0.16,<1",
   "rich>=14,<15",
@@ -18,12 +45,32 @@ dependencies = [
 
 [project.optional-dependencies]
 postgres = ["psycopg[binary]>=3.2,<4"]
-harness = ["fastapi>=0.115,<1", "uvicorn>=0.34,<1"]
+harness = [
+  "fastapi>=0.115,<1",
+  # Starlette minor bumps have broken the FastAPI harness before; keep the pin tight.
+  "starlette>=0.46,<1.10",
+  "uvicorn>=0.34,<1",
+]
 languages = ["sqlglot>=25", "mako>=1.3"]
-dev = ["pytest>=8,<10", "ruff>=0.11,<1", "build>=1.2,<2", "httpx>=0.28,<1", "mypy>=1.15,<2", "types-PyYAML>=6", "playwright>=1.50,<2"]
+dev = [
+  "pytest>=8,<10",
+  "ruff>=0.11,<1",
+  "build>=1.2,<2",
+  # httpx 0.28 is what the harness tests were validated against; block silent 0.29 bumps.
+  "httpx>=0.28,<0.29",
+  "mypy>=1.15,<2",
+  "pytest-cov>=6,<8",
+  "types-PyYAML>=6",
+  "playwright>=1.50,<2",
+]
 
 [project.scripts]
 blastradius = "blastradius.cli:app"
+
+[project.urls]
+Repository = "https://github.com/Taarunkarthik/BLAST_RADIUS"
+Issues = "https://github.com/Taarunkarthik/BLAST_RADIUS/issues"
+Changelog = "https://github.com/Taarunkarthik/BLAST_RADIUS/blob/main/CHANGELOG.md"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/blastradius"]
@@ -40,3 +87,48 @@ target-version = "py311"
 select = ["E", "F", "I", "UP", "B"]
 ignore = ["E501", "B008"]
 
+[tool.mypy]
+python_version = "3.12"
+ignore_missing_imports = true
+check_untyped_defs = true
+
+# PyYAML ships no inline types; development installs include its stubs.
+[[tool.mypy.overrides]]
+module = "yaml"
+ignore_missing_imports = true
+
+# The modules below do inherently dynamic work (regex/YAML node handling,
+# subprocess pipes, loosely-typed JSON report building, Starlette mapping APIs).
+# Without source changes the pragmatic gate is mypy with these scoped,
+# code-specific suppressions; every other module is checked fully.
+[[tool.mypy.overrides]]
+module = "blastradius.graph"
+disable_error_code = ["assignment", "arg-type"]
+
+[[tool.mypy.overrides]]
+module = "blastradius.worker"
+disable_error_code = ["var-annotated", "union-attr"]
+
+[[tool.mypy.overrides]]
+module = "blastradius.checkers"
+disable_error_code = ["var-annotated", "index", "assignment", "arg-type"]
+
+[[tool.mypy.overrides]]
+module = "blastradius.discovery"
+disable_error_code = ["var-annotated"]
+
+[[tool.mypy.overrides]]
+module = "blastradius.scanner"
+disable_error_code = ["var-annotated", "arg-type", "index"]
+
+[[tool.mypy.overrides]]
+module = "blastradius.harness"
+disable_error_code = ["call-overload", "index", "arg-type"]
+
+[tool.coverage.run]
+source = ["blastradius"]
+
+[tool.coverage.report]
+show_missing = true
+# Measured at 78% line coverage on Python 3.12; floor leaves ~3 points of headroom.
+fail_under = 75

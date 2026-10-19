@@ -23,9 +23,10 @@ def canonical_root(path: Path) -> str:
 
 class ScanStore:
     def __init__(self, database_url: str | None = None):
-        self.database_url = database_url or os.environ.get("BLASTRADIUS_DATABASE_URL")
-        if not self.database_url:
+        url = database_url or os.environ.get("BLASTRADIUS_DATABASE_URL")
+        if not url:
             raise StoreError("Set BLASTRADIUS_DATABASE_URL to use saved scans. Ordinary scans do not need a database.")
+        self.database_url = url
 
     @contextmanager
     def _connection(self, *, initialize=False):
@@ -39,7 +40,8 @@ class ScanStore:
                 connection.execute("SET LOCAL statement_timeout = '30s'")
                 if not initialize:
                     connection.execute("SET LOCAL search_path TO blastradius, pg_catalog")
-                    version = connection.execute("SELECT max(version) AS version FROM schema_migrations").fetchone()["version"]
+                    row = connection.execute("SELECT max(version) AS version FROM schema_migrations").fetchone()
+                    version = row["version"] if row else None
                     if version != 1:
                         raise StoreError("Unsupported database schema version. Run 'blastradius db init' with the matching release.")
                 yield connection
