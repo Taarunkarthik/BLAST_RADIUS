@@ -27,7 +27,7 @@ class NodeWorker:
             [node, str(RUNTIME / "worker.mjs")], stdin=subprocess.PIPE,
             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True,
             encoding="utf-8", cwd=RUNTIME, env=env,
-            creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0,
         )
         self.timeout = timeout
         self.responses = queue.Queue()
