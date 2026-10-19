@@ -16,11 +16,17 @@ Open the address printed by the command, normally [http://127.0.0.1:8765](http:/
 
 1. Leave the directory as `.` or select a subdirectory within the startup root.
 2. Choose Full scan, Structure only, or Health only, then Run scan.
-3. Search findings or filter by severity; select a row to inspect its dependency paths.
-4. Open Coverage for checked, excluded, unsupported, incomplete, and unresolved cases.
-5. Export JSON to download the complete report.
+3. **Overview** is the dashboard: a metrics row (files checked, issues, high severity, affected files), an inline SVG severity donut, a **Top blast radius** ranking of the failures with the widest reach, and coverage and dependency-graph summaries. A banner appears here when the scan is partial.
+4. **Findings** is the full diagnostic list. Search matches are highlighted; severity and **Tree impact only** filters and severity/file/impact sorting narrow the list. Selecting a finding opens a detail panel with a collapsible, colour-coded tree of its direct and transitive dependents, plus copy actions for the report ID and the CLI command.
+5. **Map** is the filesystem component tree: collapsible directories carry an aggregate severity, unchecked files are muted with their reason, and selecting a file shows a panel with its issues, imports, imported-by files, and blast radius.
+6. **Dependencies** draws the JS/TS import graph as an inline SVG — files, packages, and unresolved imports get distinct shapes — with zoom controls and click-to-highlight blast radius, a node index, and imports/imported-by tables.
+7. **Coverage** summarizes what was and was not checked with a stacked bar and clickable rows for unsupported, excluded, incomplete, and checked files.
+8. **Saved scans** lists saved scans and compares a base and head pair (see below).
+9. Export JSON to download the complete report.
 
-The browser paginates findings, shows at most 200 dependency paths per finding, and shows the first 200 entries per coverage group. Each truncated view says so; JSON export retains the complete report. Health mode has no graph, and non-JS/TS findings explicitly show No Tree Impact. Partial scans show a coverage warning.
+Sections use hash routes (`#overview`, `#findings`, `#findings/<finding-id>`, `#map`, `#dependencies`, `#coverage`, `#history`), so browser Back/Forward work and a reload restores the last report held in memory. Findings deep-link via `#findings/<finding-id>`, and unknown routes fall back to Overview. The UI is a small dependency-free ES-module app described in `src/blastradius/static/CONTRACT.md`.
+
+The browser paginates findings (30 per page), shows at most 200 dependency paths per finding, and shows the first 200 entries per coverage group. Each truncated view says so; JSON export retains the complete report. Health mode has no graph, and non-JS/TS findings explicitly show No Tree Impact. Partial scans show a coverage warning.
 
 ## Save and compare
 

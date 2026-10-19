@@ -1,259 +1,527 @@
-const $ = id => document.getElementById(id);
-const token = document.querySelector('meta[name="blastradius-token"]').content;
-const PAGE_SIZE = 30;
-let report = null;
-let page = 0;
-let selected = null;
-let session = null;
+/**
+ * BlastRadius browser harness — bootstrap and router only.
+ *
+ * ---------------------------------------------------------------------------
+ * VIEW CONTRACT
+ * ---------------------------------------------------------------------------
+ * Every module in views/ exports exactly one required entry point:
+ *
+ *   export function render(container, ctx)
+ *
+ * `container` is an empty HTMLElement owned by the router. The view must paint
+ * it with DOM nodes (textContent / lib/dom.js helpers only — never innerHTML,
+ * never inline styles) and may attach its own listeners. Views must not touch
+ * the shell (sidebar, scan form, notice, footer), read location.hash directly,
+ * or keep module-level mutable UI state: the router re-renders on every state
+ * change and on Back/Forward.
+ *
+ * `ctx` is:
+ *   {
+ *     state:    read-only snapshot of the store (see below),
+ *     api:      (path, body?) => Promise<any>   // token header + error handling
+ *     node:     (tag, text?, className?) => HTMLElement
+ *     notify:   (message?) => void              // aria-live notice; '' hides it
+ *     format:   lib/format.js namespace
+ *     tree:     lib/tree.js namespace
+ *     graph:    lib/graph.js namespace
+ *     setState: (patch | (state) => patch) => void
+ *     view:     (name, id?) => void             // router navigation / deep link
+ *   }
+ *
+ * State shape (all keys always present):
+ *   report          object | null   last /api/scan or /api/report payload
+ *   session         object | null   /api/session payload
+ *   selectedId      string | null   stable finding id `file:line:type:target`
+ *   filters         { query, severity, page }   findings search + pagination
+ *   graphFocus      string | null   namespaced node id for Map
+ *   dependencyFocus string | null   namespaced node id for Dependencies
+ *   dependencyQuery string        Dependencies node filter
+ *   history         object | null   last /api/history payload
+ *
+ * Routes: #overview, #findings, #findings/<encoded-id>, #map, #dependencies,
+ * #coverage, #history. The router maps unknown routes to #overview.
+ * ---------------------------------------------------------------------------
+ */
 
-function node(tag, text = '', className = '') {
-  const result = document.createElement(tag);
-  result.textContent = text;
-  if (className) result.className = className;
-  return result;
-}
+import { api } from './lib/api.js';
+import { createStore } from './lib/state.js';
+import { node as makeNode, emptyState } from './lib/dom.js';
+import * as format from './lib/format.js';
+import * as tree from './lib/tree.js';
+import * as graph from './lib/graph.js';
+
+import * as overviewView from './views/overview.js';
+import * as findingsView from './views/findings.js';
+import * as mapView from './views/map.js';
+import * as dependenciesView from './views/dependencies.js';
+import * as coverageView from './views/coverage.js';
+import * as historyView from './views/history.js';
+
+const ROUTES = Object.freeze({
+  overview: { module: overviewView, title: 'Repository health', subtitle: 'Find what’s broken. Understand what depends on it.' },
+  findings: { module: findingsView, title: 'Findings', subtitle: 'Every diagnostic, with the dependency impact behind it.' },
+  map: { module: mapView, title: 'Component map', subtitle: 'Every file as a tree node, with its import links and blast radius.' },
+  dependencies: { module: dependenciesView, title: 'Dependency graph', subtitle: 'The JS/TS import graph and reverse blast radius, node by node.' },
+  coverage: { module: coverageView, title: 'Coverage', subtitle: 'An explicit account of what was and was not checked.' },
+  history: { module: historyView, title: 'Saved scans', subtitle: 'Compare how this workspace changes over time.' },
+});
+const DEFAULT_ROUTE = 'overview';
+
+const $ = id => document.getElementById(id);
+
+const store = createStore({
+  report: null,
+  session: null,
+  selectedId: null,
+  filters: { query: '', severity: 'all', page: 0 },
+  graphFocus: null,
+  dependencyFocus: null,
+  dependencyQuery: '',
+  history: null,
+});
+
+const root = $('view-root');
+let currentRoute = null;
+let rendering = false;
+
+/* ------------------------------------------------------------------ notices */
 
 function notify(message = '') {
-  $('notice').textContent = message;
-  $('notice').hidden = !message;
+  const notice = $('notice');
+  notice.textContent = message;
+  notice.hidden = !message;
 }
 
-async function api(path, body) {
-  const response = await fetch(path, {
-    method: body === undefined ? 'GET' : 'POST',
-    headers: { 'X-BlastRadius-Token': token, ...(body === undefined ? {} : { 'Content-Type': 'application/json' }) },
-    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-  });
-  const data = await response.json();
-  if (!response.ok) {
-    const detail = typeof data.detail === 'string' ? data.detail : 'Please check the request fields and try again.';
-    throw new Error(detail);
+/* ------------------------------------------------------------------ routing */
+
+function parseHash() {
+  const raw = location.hash.replace(/^#/, '');
+  if (!raw) return { name: DEFAULT_ROUTE, param: null };
+  const slash = raw.indexOf('/');
+  const name = (slash === -1 ? raw : raw.slice(0, slash)).toLowerCase();
+  const rest = slash === -1 ? '' : raw.slice(slash + 1);
+  let param = null;
+  if (rest) {
+    try {
+      param = decodeURIComponent(rest);
+    } catch {
+      param = rest;
+    }
   }
-  return data;
+  return { name: Object.hasOwn(ROUTES, name) ? name : DEFAULT_ROUTE, param };
 }
 
-function view(name) {
+function hrefFor(name, id = null) {
+  return id ? `#${name}/${encodeURIComponent(id)}` : `#${name}`;
+}
+
+/**
+ * Router entry used by views. Setting the hash triggers hashchange, which
+ * performs the single render. If the target is already current we render
+ * directly so re-selecting a finding still updates the detail panel.
+ */
+function view(name, id = null) {
+  const target = Object.hasOwn(ROUTES, name) ? name : DEFAULT_ROUTE;
+  const next = hrefFor(target, id);
+  if (location.hash === next) {
+    render();
+    return;
+  }
+  location.hash = next;
+}
+
+function setActiveNav(name) {
   document.querySelectorAll('[data-view]').forEach(button => {
     const active = button.dataset.view === name;
     button.classList.toggle('active', active);
-    button.setAttribute('aria-current', active ? 'page' : 'false');
+    // aria-current="false" is invalid; omit the attribute when not current.
+    if (active) button.setAttribute('aria-current', 'page');
+    else button.removeAttribute('aria-current');
   });
-  $('scan-view').hidden = !['overview', 'findings'].includes(name);
-  $('coverage-view').hidden = name !== 'coverage';
-  $('history-view').hidden = name !== 'history';
-  if (name === 'history') loadHistory();
-  if (name === 'findings') $('search').focus();
 }
 
-function empty(container, title, message) {
-  const block = node('div', '', 'empty-state');
-  block.append(node('span', '◎'), node('h3', title), node('p', message));
-  container.replaceChildren(block);
+function setHeading(route) {
+  const meta = ROUTES[route];
+  const title = $('page-title');
+  title.replaceChildren(document.createTextNode(meta.title), makeNode('span', '.', 'accent'));
+  $('page-subtitle').textContent = meta.subtitle;
+  document.title = `${meta.title} · BlastRadius`;
 }
 
-function renderSummary() {
+function render() {
+  // A view render may call setState (e.g. deep-link normalization). The
+  // subscriber re-enters here; the outer render already paints the final state.
+  if (rendering) return;
+  rendering = true;
+  try {
+    const previous = currentRoute;
+    const { name, param } = parseHash();
+    const before = store.get();
+
+    // Canonicalize unknown/empty routes without adding a history entry.
+    const canonical = hrefFor(name, param);
+    if (location.hash !== canonical) window.history.replaceState(null, '', canonical);
+
+    // Deep links carry the finding id; a bare #findings keeps the last valid one.
+    if (name === 'findings') {
+      const requested = param ?? before.selectedId;
+      const valid = requested && format.findIssue(before.report, requested) ? requested : null;
+      if (before.selectedId !== valid) store.set({ selectedId: valid });
+      // An unknown id in the URL is dropped so reloads do not keep a dead link.
+      if (param && !valid) window.history.replaceState(null, '', hrefFor('findings'));
+    }
+
+    currentRoute = name;
+    setActiveNav(name);
+    setHeading(name);
+
+    const state = store.get();
+    syncChrome(state);
+
+    const ctx = {
+      state,
+      api,
+      node: makeNode,
+      notify,
+      format,
+      tree,
+      graph,
+      setState: patch => store.set(patch),
+      view,
+    };
+
+    try {
+      ROUTES[name].module.render(root, ctx);
+    } catch (error) {
+      console.error(`BlastRadius view "${name}" failed to render`, error);
+      emptyState(root, 'This view could not render', error.message ?? String(error), '⚠');
+    }
+
+    // The "/" shortcut and Escape both hand focus to the findings search once
+    // the view has painted (the input may not exist yet when the route changes).
+    if (focusFindingsSearch) {
+      focusFindingsSearch = false;
+      if (name === 'findings') {
+        const search = root.querySelector('input[aria-label="Search findings"]');
+        if (search) search.focus();
+      }
+    }
+
+    // Only jump to the top on route changes; typing in a filter must not scroll.
+    if (previous !== name) window.scrollTo({ top: 0, behavior: 'auto' });
+  } finally {
+    rendering = false;
+  }
+}
+
+/* ------------------------------------------------------- shared chrome sync */
+
+function affectedFileCount(report) {
+  const affected = new Set();
+  for (const issue of report.issues ?? []) {
+    if (!issue.impact?.has_tree_impact) continue;
+    for (const file of issue.impact.direct_dependents ?? []) affected.add(file);
+    for (const file of issue.impact.transitive_dependents ?? []) affected.add(file);
+  }
+  return affected.size;
+}
+
+function syncChrome(state) {
+  const report = state.report;
+  const session = state.session;
+  const actions = $('report-actions');
+  const save = $('save-button');
+
+  if (session) {
+    $('project-name').textContent = session.name;
+    $('root-path').textContent = session.root;
+    save.hidden = !session.persistence;
+  }
+
+  if (!report) {
+    $('nav-count').textContent = '0';
+    $('report-id').textContent = '';
+    actions.hidden = true;
+    $('footer-status').textContent = 'Waiting for a scan';
+    return;
+  }
+
   const scan = report.scan;
-  $('metric-files').textContent = scan.files_checked.toLocaleString();
-  $('metric-coverage').textContent = `${scan.files_discovered.toLocaleString()} discovered · ${scan.not_checked_count} unsupported`;
-  $('metric-issues').textContent = report.summary.issues.toLocaleString();
-  $('metric-high').textContent = report.summary.high.toLocaleString();
-  $('metric-breakdown').textContent = `${report.summary.medium} medium · ${report.summary.low} low`;
-  const affected = new Set(report.issues.flatMap(issue => issue.impact.has_tree_impact ? [...issue.impact.direct_dependents, ...issue.impact.transitive_dependents] : []));
-  $('metric-affected').textContent = scan.mode === 'health' ? '—' : affected.size.toLocaleString();
-  $('nav-count').textContent = report.summary.issues;
+  const summary = report.summary;
+  $('nav-count').textContent = format.number(summary.issues);
+  $('nav-count').title = `${format.number(affectedFileCount(report))} affected files`;
   $('report-id').textContent = `SCAN ${scan.id}`;
-  $('report-actions').hidden = false;
-  $('save-button').hidden = !session?.persistence;
-  $('footer-status').textContent = `${scan.mode.toUpperCase()} · ${scan.partial ? 'PARTIAL COVERAGE' : 'SCAN COMPLETE'}`;
-  $('scan-state').textContent = scan.partial ? 'Partial coverage' : 'Scan complete';
-  if (scan.partial || scan.graph_partial) notify('This report has incomplete coverage or graph information. Open Coverage for the details.');
+  actions.hidden = false;
+  $('footer-status').textContent = `${String(scan.mode).toUpperCase()} · ${scan.partial ? 'PARTIAL COVERAGE' : 'SCAN COMPLETE'}`;
 }
 
-function renderFindings() {
-  if (!report) return;
-  const query = $('search').value.toLowerCase();
-  const severity = $('severity').value;
-  const filtered = report.issues.filter(issue => (severity === 'all' || issue.severity === severity) && `${issue.file} ${issue.type} ${issue.target}`.toLowerCase().includes(query));
-  const pages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
-  page = Math.min(page, pages - 1);
-  const visible = filtered.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
-  if (!visible.includes(selected)) {
-    selected = visible[0] || null;
-    renderDetail();
-  }
-  $('finding-count').textContent = filtered.length;
-  $('finding-list').replaceChildren();
-  if (!filtered.length) {
-    empty($('finding-list'), report.issues.length ? 'No matching findings' : 'No issues detected', report.issues.length ? 'Try a different search or severity.' : 'The configured checks found no issues. Review Coverage to see their limits.');
-  }
-  for (const issue of visible) {
-    const button = node('button', '', `finding${selected === issue ? ' selected' : ''}`);
-    button.type = 'button';
-    button.setAttribute('aria-pressed', selected === issue ? 'true' : 'false');
-    const row = node('div', '', 'finding-row');
-    row.append(node('span', `${issue.file}:${issue.line}`, 'finding-file'), node('span', issue.severity, `badge ${issue.severity}`));
-    button.append(row, node('div', issue.type, 'finding-type'));
-    button.addEventListener('click', () => { selected = issue; renderFindings(); renderDetail(); });
-    $('finding-list').append(button);
-  }
-  $('pagination').hidden = pages <= 1;
-  $('previous').disabled = page === 0;
-  $('next').disabled = page === pages - 1;
-  $('page-label').textContent = `${page + 1} / ${pages}`;
+/* ------------------------------------------------------------ shared events */
+
+function wireScanForm() {
+  $('scan-form').addEventListener('submit', async event => {
+    event.preventDefault();
+    const button = $('scan-button');
+    const save = $('save-button');
+    button.disabled = true;
+    button.textContent = 'Scanning…';
+    button.classList.add('busy');
+    $('scan-state').textContent = 'Checking files and dependencies…';
+    save.disabled = true;
+    notify();
+    try {
+      const report = await api('/api/scan', {
+        path: $('scan-path').value || '.',
+        mode: $('scan-mode').value,
+      });
+      const first = report.issues?.[0] ? format.issueId(report.issues[0]) : null;
+      store.set({
+        report,
+        selectedId: first,
+        filters: { query: '', severity: 'all', page: 0 },
+        graphFocus: null,
+        dependencyFocus: null,
+        dependencyQuery: '',
+        history: null,
+      });
+      $('scan-state').textContent = report.scan.partial ? 'Partial coverage' : 'Scan complete';
+      if (report.scan.partial || report.scan.graph_partial) {
+        notify('This report has incomplete coverage or graph information. Open Coverage for the details.');
+      }
+      view(DEFAULT_ROUTE);
+    } catch (error) {
+      notify(error.message);
+      $('scan-state').textContent = 'Scan did not complete';
+    } finally {
+      button.disabled = false;
+      button.textContent = 'Run scan ↗';
+      button.classList.remove('busy');
+      save.disabled = false;
+    }
+  });
 }
 
-function renderDetail() {
-  if (!selected) {
-    empty($('detail'), 'No finding selected', 'Select a diagnostic to inspect its dependency impact.');
+function wireNav() {
+  document.querySelectorAll('[data-view]').forEach(button => {
+    button.addEventListener('click', () => view(button.dataset.view));
+  });
+}
+
+function wireActions() {
+  $('export-button').addEventListener('click', () => {
+    const report = store.get().report;
+    if (!report) return;
+    const url = URL.createObjectURL(new Blob([`${JSON.stringify(report, null, 2)}\n`], { type: 'application/json' }));
+    const link = makeNode('a');
+    link.href = url;
+    link.download = `blastradius-${report.scan.id}.json`;
+    document.body.append(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  });
+
+  $('save-button').addEventListener('click', async () => {
+    const report = store.get().report;
+    if (!report) return;
+    const button = $('save-button');
+    button.disabled = true;
+    try {
+      const saved = await api('/api/save', { report_id: report.scan.id });
+      notify(`Scan saved. ID: ${saved.id}`);
+      store.set({ history: null });
+    } catch (error) {
+      notify(error.message);
+    } finally {
+      button.disabled = false;
+    }
+  });
+}
+
+/* --------------------------------------------------------- keyboard shortcuts */
+
+// Set by the "/" shortcut and Escape so render() can move focus to the
+// findings search input once the view has painted.
+let focusFindingsSearch = false;
+
+function isTypingTarget(target) {
+  return target instanceof HTMLElement && (
+    target.tagName === 'INPUT' ||
+    target.tagName === 'SELECT' ||
+    target.tagName === 'TEXTAREA' ||
+    target.isContentEditable
+  );
+}
+
+/** Elements with their own activation behaviour; global keys must not double-fire. */
+function isInteractiveTarget(target) {
+  if (!(target instanceof HTMLElement)) return false;
+  if (isTypingTarget(target)) return true;
+  const tag = target.tagName;
+  if (tag === 'BUTTON' || tag === 'A' || tag === 'SUMMARY') return true;
+  const role = target.getAttribute('role');
+  return Boolean(role && ['option', 'button', 'link', 'menuitem', 'menuitemcheckbox', 'menuitemradio', 'tab', 'checkbox', 'radio', 'switch', 'treeitem'].includes(role));
+}
+
+/** Move the finding selection by one row in the visible, ordered list. */
+function moveFindingSelection(delta) {
+  const state = store.get();
+  if (!state.report) return;
+  const ids = findingsView.visibleIssueIds(state.report, state.filters);
+  if (!ids.length) return;
+  const current = state.selectedId ? ids.indexOf(state.selectedId) : -1;
+  const next = Math.min(ids.length - 1, Math.max(0, current + delta));
+  if (next !== current) store.set({ selectedId: ids[next] });
+}
+
+function onGlobalKeyDown(event) {
+  if (event.defaultPrevented || event.ctrlKey || event.metaKey || event.altKey) return;
+  const target = event.target;
+
+  // Escape is a command key, not a typing key: it clears the findings search
+  // and the selection even while the search field itself has focus.
+  if (event.key === 'Escape') {
+    const state = store.get();
+    const patch = {};
+    if (state.filters.query) patch.filters = { ...state.filters, query: '' };
+    if (state.selectedId) patch.selectedId = null;
+    if (Object.keys(patch).length > 0) {
+      if (target?.getAttribute?.('aria-label') === 'Search findings') focusFindingsSearch = true;
+      store.set(patch);
+    }
     return;
   }
-  const issue = selected;
-  const impact = issue.impact;
-  const body = node('div', '', 'detail-body');
-  body.append(node('span', issue.severity, `badge ${issue.severity}`), node('h3', `${issue.file}:${issue.line}`, 'detail-file'), node('div', issue.type, 'finding-type'));
-  body.append(node('p', issue.message || issue.target, 'detail-message'));
-  if (issue.target) body.append(node('p', `Target: ${issue.target}`, 'note mono'));
-  if (!impact.has_tree_impact) {
-    body.append(node('div', 'No Tree Impact', 'impact-banner local'), node('p', impact.note, 'note'));
-  } else {
-    body.append(node('div', impact.is_root ? 'CRITICAL · root node — no dependents in the scanned graph' : `${impact.affected_count} affected / ${impact.eligible_count} eligible files (${impact.impact_percentage}%)`, 'impact-banner'));
-    const numbers = node('div', '', 'impact-numbers');
-    for (const [label, value] of [['Direct dependents', impact.direct_dependents.length], ['Transitive dependents', impact.transitive_dependents.length]]) {
-      const item = node('div'); item.append(node('strong', String(value)), node('span', label)); numbers.append(item);
-    }
-    body.append(numbers);
-    const tree = node('div', '', 'tree');
-    tree.append(node('div', issue.file));
-    const branches = new Map([[JSON.stringify([issue.file]), tree]]);
-    for (const path of impact.paths.slice(0, 200)) {
-      for (let index = 1; index < path.length; index++) {
-        const key = JSON.stringify(path.slice(0, index + 1));
-        if (branches.has(key)) continue;
-        const parent = branches.get(JSON.stringify(path.slice(0, index)));
-        let list = [...parent.children].find(child => child.tagName === 'UL');
-        if (!list) { list = node('ul'); parent.append(list); }
-        const entry = node('li', path[index]);
-        entry.append(node('small', index === 1 ? 'direct' : `distance ${index}`));
-        list.append(entry); branches.set(key, entry);
+
+  // Never hijack keys while the user is typing in a field.
+  if (isTypingTarget(target)) return;
+
+  switch (event.key) {
+    case '/':
+      event.preventDefault();
+      if (currentRoute !== 'findings') {
+        focusFindingsSearch = true;
+        view('findings');
+      } else {
+        const search = root.querySelector('input[aria-label="Search findings"]');
+        if (search) search.focus();
       }
-    }
-    body.append(tree);
-    if (impact.paths.length > 200) body.append(node('p', 'Showing the first 200 dependency paths. Export JSON for every path.', 'note'));
-    if (impact.partial) body.append(node('p', 'This impact calculation covers a partial graph.', 'note'));
-    body.append(node('p', impact.note, 'note'));
+      break;
+    case 'ArrowDown':
+    case 'j':
+      event.preventDefault();
+      moveFindingSelection(1);
+      break;
+    case 'ArrowUp':
+    case 'k':
+      event.preventDefault();
+      moveFindingSelection(-1);
+      break;
+    case 'Enter':
+      // Focused rows/buttons activate natively; otherwise open the selected finding.
+      if (isInteractiveTarget(target)) return;
+      event.preventDefault();
+      const { selectedId } = store.get();
+      if (selectedId) view('findings', selectedId);
+      break;
   }
-  $('detail').replaceChildren(body);
 }
 
-function renderCoverage() {
-  const scan = report.scan;
-  $('coverage').replaceChildren();
-  const groups = [
-    ['Unsupported files', scan.not_checked_files.map(file => ({ file, reason: 'No configured checker' }))],
-    ['Excluded files', scan.excluded_files], ['Incomplete checks', scan.skipped_files],
-    ['Resolution limitations', scan.limitations], ['Checked files', scan.checked_files.map(file => ({ file, reason: 'Checked' }))],
-  ];
-  for (const [title, items] of groups) {
-    const group = node('div', '', 'coverage-group');
-    group.append(node('h3', `${title} (${items.length})`));
-    if (!items.length) group.append(node('p', 'None', 'note'));
-    for (const item of items.slice(0, 200)) {
-      const row = node('div', '', 'coverage-row');
-      row.append(node('span', item.file, 'mono'), node('span', item.reason)); group.append(row);
-    }
-    if (items.length > 200) group.append(node('p', 'Showing 200 entries. Export JSON for the complete list.', 'note'));
-    $('coverage').append(group);
-  }
-  const notes = node('ul', '', 'coverage-notes');
-  scan.coverage_notes.forEach(note => notes.append(node('li', note)));
-  $('coverage').append(notes);
+function wireKeyboard() {
+  window.addEventListener('keydown', onGlobalKeyDown);
 }
 
-$('scan-form').addEventListener('submit', async event => {
-  event.preventDefault();
-  const button = $('scan-button');
-  button.disabled = true; button.textContent = 'Scanning…'; button.classList.add('busy');
-  $('scan-state').textContent = 'Checking files and dependencies…';
-  $('save-button').disabled = true;
-  notify();
-  try {
-    report = await api('/api/scan', { path: $('scan-path').value || '.', mode: $('scan-mode').value });
-    selected = report.issues[0] || null; page = 0;
-    renderSummary(); renderFindings(); renderDetail(); renderCoverage(); view('overview');
-  } catch (error) { notify(error.message); $('scan-state').textContent = 'Scan did not complete'; }
-  finally { button.disabled = false; button.textContent = 'Run scan ↗'; button.classList.remove('busy'); $('save-button').disabled = false; }
-});
+/* ------------------------------------------------------------- theme toggle */
 
-$('search').addEventListener('input', () => { page = 0; renderFindings(); });
-$('severity').addEventListener('change', () => { page = 0; renderFindings(); });
-$('previous').addEventListener('click', () => { page--; renderFindings(); });
-$('next').addEventListener('click', () => { page++; renderFindings(); });
-document.querySelectorAll('[data-view]').forEach(button => button.addEventListener('click', () => view(button.dataset.view)));
-$('export-button').addEventListener('click', () => {
-  if (!report) return;
-  const url = URL.createObjectURL(new Blob([JSON.stringify(report, null, 2) + '\n'], { type: 'application/json' }));
-  const link = node('a'); link.href = url; link.download = `blastradius-${report.scan.id}.json`;
-  document.body.append(link); link.click(); link.remove(); setTimeout(() => URL.revokeObjectURL(url), 1000);
-});
-$('save-button').addEventListener('click', async () => {
-  if (!report) return;
-  $('save-button').disabled = true;
-  try {
-    const saved = await api('/api/save', { report_id: report.scan.id });
-    notify(`Scan saved. ID: ${saved.id}`);
-  } catch (error) { notify(error.message); }
-  finally { $('save-button').disabled = false; }
-});
+const THEME_KEY = 'blastradius-theme';
 
-async function loadHistory() {
-  $('history-list').replaceChildren(); $('comparison').replaceChildren();
-  $('base-scan').replaceChildren(); $('head-scan').replaceChildren(); $('compare-button').disabled = true;
-  if (!session?.persistence) {
-    $('history-note').textContent = 'Saved history is optional. Configure PostgreSQL and register this workspace with the CLI to enable it. Scanning and JSON export work without a database.';
-    return;
+function applyTheme(theme) {
+  const next = theme === 'light' ? 'light' : 'dark';
+  document.documentElement.dataset.theme = next;
+  const toggle = $('theme-toggle');
+  if (toggle) {
+    toggle.textContent = next === 'light' ? '☀' : '☾';
+    toggle.setAttribute('aria-label', next === 'light' ? 'Switch to dark theme' : 'Switch to light theme');
+    toggle.setAttribute('aria-pressed', next === 'light' ? 'true' : 'false');
   }
-  $('history-note').textContent = 'Loading this workspace’s saved scans…';
   try {
-    const history = await api('/api/history');
-    $('history-note').textContent = history.scans.length ? `${history.scans.length} saved scans for ${history.project.name}. Select a base and head to compare.` : 'No saved scans yet. Run a scan, then choose Save scan.';
-    for (const scan of history.scans) {
-      const label = `${new Date(scan.saved_at).toLocaleString()} · ${scan.mode} · ${scan.id.slice(0, 8)}`;
-      for (const id of ['base-scan', 'head-scan']) {
-        const option = node('option', label); option.value = scan.id; $(id).append(option);
-      }
-      const row = node('div', '', 'history-row');
-      row.append(node('span', label), node('span', scan.partial ? 'Partial' : 'Complete', 'muted'));
-      $('history-list').append(row);
-    }
-    if (history.scans.length > 1) $('base-scan').selectedIndex = 1;
-    $('compare-button').disabled = history.scans.length < 2;
-  } catch (error) { $('history-note').textContent = error.message; }
+    localStorage.setItem(THEME_KEY, next);
+  } catch {
+    // Storage unavailable (private mode): the toggle still works for the session.
+  }
 }
-$('refresh-history').addEventListener('click', loadHistory);
-$('compare-button').addEventListener('click', async () => {
-  $('compare-button').disabled = true;
-  try {
-    const result = await api('/api/compare', { base: $('base-scan').value, head: $('head-scan').value });
-    const summary = node('div', '', 'compare-summary');
-    for (const [key, value] of Object.entries(result.summary)) {
-      const item = node('div'); item.append(node('strong', String(value)), node('span', key)); summary.append(item);
-    }
-    $('comparison').replaceChildren(summary);
-    result.warnings.forEach(warning => $('comparison').append(node('p', warning, 'note')));
-    for (const category of ['added', 'resolved', 'changed', 'unverified']) {
-      for (const record of result[category].slice(0, 100)) {
-        const issue = category === 'changed' ? record.head : record;
-        $('comparison').append(node('p', `${category.toUpperCase()} · ${issue.file}:${issue.line} · ${issue.type}`, 'note mono'));
-      }
-      if (result[category].length > 100) $('comparison').append(node('p', `Showing 100 ${category} findings. Use CLI JSON comparison for the full result.`, 'note'));
-    }
-  } catch (error) { notify(error.message); }
-  finally { $('compare-button').disabled = false; }
-});
 
-try {
-  session = await api('/api/session');
-  $('project-name').textContent = session.name;
-  $('root-path').textContent = session.root;
-  $('history-note').textContent = session.persistence ? 'Saved history is connected.' : 'Saved history is not configured.';
-} catch (error) { notify(error.message); $('scan-button').disabled = true; }
+function wireThemeToggle() {
+  const toggle = $('theme-toggle');
+  if (toggle) {
+    toggle.addEventListener('click', () => {
+      applyTheme(document.documentElement.dataset.theme === 'light' ? 'dark' : 'light');
+    });
+  }
+  let stored = null;
+  try {
+    stored = localStorage.getItem(THEME_KEY);
+  } catch {
+    stored = null;
+  }
+  applyTheme(stored === 'light' ? 'light' : 'dark');
+}
+
+/* ---------------------------------------------------------------- skip link */
+
+function wireSkipLink() {
+  const skip = $('skip-link');
+  if (!skip) return;
+  // Prevent the anchor from rewriting location.hash (the router owns the hash).
+  skip.addEventListener('click', event => {
+    event.preventDefault();
+    const main = $('main-content');
+    if (main) {
+      main.focus();
+      main.scrollIntoView();
+    }
+  });
+}
+
+/* ---------------------------------------------------------------- bootstrap */
+
+async function bootstrap() {
+  wireNav();
+  wireScanForm();
+  wireActions();
+  wireKeyboard();
+  wireThemeToggle();
+  wireSkipLink();
+
+  window.addEventListener('hashchange', render);
+  store.subscribe(() => {
+    if (currentRoute) render();
+  });
+
+  try {
+    const session = await api('/api/session');
+    store.set({ session });
+  } catch (error) {
+    notify(error.message);
+    $('scan-button').disabled = true;
+  }
+
+  // Restore the most recent in-memory report so reloads and deep links keep
+  // working. A 404 simply means this harness process has not scanned yet.
+  try {
+    const report = await api('/api/report');
+    if (report) {
+      const selected = report.issues?.[0] ? format.issueId(report.issues[0]) : null;
+      store.set({ report, selectedId: selected });
+      $('scan-state').textContent = report.scan.partial ? 'Partial coverage' : 'Scan complete';
+    }
+  } catch (error) {
+    if (error.status !== 404) notify(error.message);
+  }
+
+  if (!location.hash) {
+    // Replace so the initial route does not add a spurious history entry.
+    window.history.replaceState(null, '', hrefFor(DEFAULT_ROUTE));
+  }
+  render();
+}
+
+bootstrap();

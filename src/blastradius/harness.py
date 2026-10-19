@@ -8,6 +8,7 @@ from urllib.parse import urlsplit
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from starlette.datastructures import Headers, MutableHeaders
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
@@ -162,6 +163,11 @@ def create_app(root: Path, *, token: str | None = None) -> FastAPI:
     @app.get("/static/styles.css")
     def stylesheet():
         return FileResponse(STATIC / "styles.css", media_type="text/css")
+
+    # ES modules (lib/, views/) and per-view stylesheets (styles/) live in
+    # subdirectories. StaticFiles resolves paths safely under STATIC and serves
+    # correct media types; index.html stays on the token-injecting route above.
+    app.mount("/static", StaticFiles(directory=STATIC, html=False), name="static")
 
     @app.get("/api/session")
     def session():

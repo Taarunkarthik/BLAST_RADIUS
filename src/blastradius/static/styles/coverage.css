@@ -1,0 +1,273 @@
+/* Coverage view — summary strip, grouped file lists, clickable rows. */
+
+.coverage-panel {
+  margin-top: 18px;
+}
+
+/* ---------------------------------------------- summary: ratio + stacked bar */
+
+.coverage-summary {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--sunken);
+  padding: 16px 18px;
+  margin-bottom: 22px;
+}
+
+.coverage-summary-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.coverage-ratio {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.coverage-ratio-value {
+  font-size: 26px;
+  font-weight: 500;
+  letter-spacing: -0.6px;
+  line-height: 1.1;
+}
+
+.coverage-ratio-label {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.coverage-bar-track {
+  height: 10px;
+  border-radius: 999px;
+  background: var(--track-bg);
+  overflow: hidden;
+  margin: 14px 0 16px;
+}
+
+.coverage-bar {
+  display: block;
+  width: 100%;
+  height: 10px;
+}
+
+.coverage-bar-seg.checked {
+  fill: var(--accent);
+}
+
+.coverage-bar-seg.unsupported {
+  fill: var(--faint);
+}
+
+.coverage-bar-seg.excluded {
+  fill: var(--medium);
+}
+
+.coverage-bar-seg.skipped {
+  fill: var(--low);
+}
+
+.coverage-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 24px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.coverage-legend-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 96px;
+}
+
+.coverage-legend-item strong {
+  font-size: 15px;
+  font-weight: 500;
+  line-height: 1.2;
+}
+
+.coverage-legend-label {
+  font-size: 10px;
+  color: var(--muted);
+}
+
+.coverage-legend-total {
+  margin-left: auto;
+}
+
+.coverage-swatch {
+  display: inline-block;
+  flex: none;
+  width: 9px;
+  height: 9px;
+  border-radius: 2px;
+}
+
+.coverage-swatch.checked {
+  background: var(--accent);
+}
+
+.coverage-swatch.unsupported {
+  background: var(--faint);
+}
+
+.coverage-swatch.excluded {
+  background: var(--medium);
+}
+
+.coverage-swatch.skipped {
+  background: var(--low);
+}
+
+/* --------------------------------------------------------------- group lists */
+
+.coverage-group {
+  margin-bottom: 25px;
+}
+
+.coverage-group h3 {
+  font-size: 13px;
+  margin: 0 0 6px;
+}
+
+.coverage-group > .note {
+  margin: 0 0 8px;
+}
+
+.coverage-hint-line {
+  margin: 0 0 22px;
+}
+
+.coverage-row,
+.history-row {
+  display: flex;
+  gap: 20px;
+  justify-content: space-between;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--line);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.coverage-row span:last-child {
+  color: var(--muted);
+  text-align: right;
+}
+
+/* Clickable file rows are buttons so they get keyboard + focus behaviour. */
+
+.coverage-row-link {
+  width: 100%;
+  background: transparent;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  border-radius: 0;
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.coverage-row-link:hover {
+  background: var(--hover-bg-soft);
+}
+
+.coverage-row-link:hover .coverage-hint,
+.coverage-row-link:focus-visible .coverage-hint {
+  color: var(--accent);
+}
+
+.coverage-file {
+  flex: 1;
+  min-width: 0;
+}
+
+.coverage-side {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 3px;
+  flex: none;
+  max-width: 46%;
+  text-align: right;
+}
+
+.coverage-reason {
+  color: var(--muted);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.coverage-hint {
+  font-size: 10px;
+  letter-spacing: 0.4px;
+  color: var(--hint);
+  white-space: nowrap;
+}
+
+.coverage-hint.has-findings {
+  color: var(--accent);
+}
+
+.coverage-notes {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.8;
+  padding-left: 20px;
+}
+
+@media (max-width: 760px) {
+  .coverage-row,
+  .history-row {
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .coverage-row span:last-child {
+    text-align: left;
+  }
+
+  .coverage-side {
+    align-items: flex-start;
+    max-width: 100%;
+    text-align: left;
+  }
+
+  .coverage-legend-total {
+    margin-left: 0;
+  }
+}
+
+.coverage-row-link:active {
+  background: var(--hover-bg-strong);
+}
+
+@media (max-width: 520px) {
+  .coverage-summary {
+    padding: 14px;
+  }
+
+  .coverage-ratio-value {
+    font-size: 22px;
+  }
+
+  .coverage-legend {
+    gap: 8px 16px;
+  }
+
+  .coverage-legend-item {
+    min-width: 80px;
+  }
+
+  .coverage-notes {
+    padding-left: 16px;
+  }
+}

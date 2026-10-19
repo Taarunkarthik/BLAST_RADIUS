@@ -1,0 +1,435 @@
+/* History view — saved scans and side-by-side comparison.
+   Class-only styling: the harness CSP allows stylesheets, never inline styles. */
+
+.history-panel {
+  margin-top: 18px;
+}
+
+/* --------------------------------------------------------- unconfigured state */
+
+.history-unconfigured {
+  text-align: center;
+  padding: 42px 22px;
+}
+
+.history-unconfigured-glyph {
+  display: block;
+  font-size: 44px;
+  color: var(--faint);
+  margin-bottom: 12px;
+}
+
+.history-unconfigured h3 {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--muted-strong);
+  margin: 0 0 10px;
+}
+
+.history-unconfigured p {
+  max-width: 620px;
+  margin: 0 auto 8px;
+  font-size: 12px;
+  line-height: 1.8;
+  color: var(--muted);
+}
+
+/* ---------------------------------------------------------------- controls */
+
+.compare-controls {
+  display: flex;
+  gap: 15px;
+  align-items: flex-end;
+  margin: 20px 0;
+  flex-wrap: wrap;
+}
+
+.compare-controls .field {
+  flex: 1;
+  min-width: 180px;
+}
+
+.compare-controls > span {
+  align-self: center;
+  color: var(--muted);
+}
+
+/* ----------------------------------------------------------- summary strip */
+
+.compare-stats {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin: 18px 0;
+}
+
+.compare-stat {
+  flex: 1 1 96px;
+  min-width: 96px;
+  padding: 12px 14px;
+  background: var(--sunken);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  transition: border-color var(--dur) var(--ease), background-color var(--dur) var(--ease);
+}
+
+.compare-stat:hover {
+  border-color: var(--line-strong);
+}
+
+.compare-stat strong {
+  display: block;
+  font-size: 22px;
+  line-height: 1.2;
+  font-weight: 500;
+}
+
+.compare-stat span {
+  display: block;
+  margin-top: 2px;
+  font-size: 10px;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.compare-stat.added strong {
+  color: var(--high);
+}
+
+.compare-stat.resolved strong {
+  color: var(--accent);
+}
+
+.compare-stat.changed strong {
+  color: var(--medium);
+}
+
+.compare-stat.unverified strong {
+  color: var(--low);
+}
+
+.compare-stat.unchanged strong {
+  color: var(--muted);
+}
+
+/* ---------------------------------------------------------------- warnings */
+
+.compare-warnings {
+  border: 1px solid var(--warn-border);
+  border-left: 3px solid var(--medium);
+  border-radius: var(--radius-sm);
+  background: var(--warn-bg);
+  padding: 14px 16px;
+  margin: 18px 0;
+}
+
+.compare-warnings-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--medium);
+}
+
+.compare-warnings-glyph {
+  font-size: 15px;
+}
+
+.compare-warnings-head strong {
+  font-size: 12px;
+  letter-spacing: 0.4px;
+}
+
+.compare-warnings-list {
+  margin: 10px 0 0;
+  padding-left: 20px;
+  color: var(--warn-text);
+  font-size: 12px;
+  line-height: 1.8;
+}
+
+.compare-warnings-list li + li {
+  margin-top: 4px;
+}
+
+.compare-coverage {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--warn-line);
+}
+
+.compare-coverage .note {
+  margin: 2px 0;
+  color: var(--warn-text-soft);
+}
+
+.compare-meta {
+  margin: 0 0 6px;
+  font-family: var(--mono);
+  font-size: 11px;
+}
+
+/* -------------------------------------------------------- comparison tables */
+
+.compare-group {
+  margin: 22px 0;
+}
+
+.compare-group-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.compare-group-head h3 {
+  margin: 0;
+  font-size: 11px;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.compare-group.added .compare-group-head h3 {
+  color: var(--high);
+}
+
+.compare-group.resolved .compare-group-head h3 {
+  color: var(--accent);
+}
+
+.compare-group.changed .compare-group-head h3 {
+  color: var(--medium);
+}
+
+.compare-group.unverified .compare-group-head h3 {
+  color: var(--low);
+}
+
+.compare-group-head .count {
+  font-size: 10px;
+}
+
+.compare-group > .note {
+  margin: 6px 0 10px;
+}
+
+.compare-none {
+  margin: 4px 0;
+  font-style: italic;
+}
+
+.compare-table-wrap {
+  overflow-x: auto;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+}
+
+.compare-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.compare-table th {
+  text-align: left;
+  padding: 9px 12px;
+  font-size: 10px;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: var(--muted);
+  background: var(--sunken);
+  border-bottom: 1px solid var(--line-strong);
+  white-space: nowrap;
+}
+
+.compare-table td {
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--line);
+  vertical-align: top;
+  overflow-wrap: anywhere;
+}
+
+.compare-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.compare-table td:first-child {
+  border-left: 3px solid transparent;
+  white-space: nowrap;
+}
+
+.compare-row.added td:first-child {
+  border-left-color: var(--high);
+}
+
+.compare-row.resolved td:first-child {
+  border-left-color: var(--accent);
+}
+
+.compare-row.changed td:first-child {
+  border-left-color: var(--medium);
+}
+
+.compare-row.unverified td:first-child {
+  border-left-color: var(--low);
+}
+
+.compare-table tbody .compare-row:hover {
+  background: var(--row-hover);
+}
+
+.compare-file {
+  max-width: 360px;
+}
+
+/* ------------------------------------------------------------- diff detail */
+
+.diff-row td {
+  padding: 4px 12px 12px;
+  background: var(--sunken);
+  border-bottom: 1px solid var(--line);
+}
+
+.diff-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 20px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.diff-item {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  font-family: var(--mono);
+  font-size: 11px;
+}
+
+.diff-field {
+  font-size: 9px;
+  letter-spacing: 0.6px;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.diff-from {
+  color: var(--muted);
+  text-decoration: line-through;
+}
+
+.diff-arrow {
+  color: var(--muted);
+}
+
+.diff-to {
+  color: var(--accent);
+}
+
+/* ------------------------------------------------------------ history list */
+
+.history-list {
+  margin-top: 24px;
+  border-top: 1px solid var(--line);
+  padding-top: 8px;
+}
+
+.history-row {
+  display: flex;
+  gap: 20px;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--line);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.history-row-main,
+.history-row-meta {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.history-row-meta {
+  gap: 10px;
+  justify-content: flex-end;
+}
+
+.history-mode {
+  color: var(--muted);
+}
+
+.history-id {
+  font-size: 11px;
+}
+
+/* ------------------------------------------------------------ scan badges */
+
+.badge.partial {
+  color: var(--medium);
+  background: var(--medium-bg);
+}
+
+.badge.complete {
+  color: var(--accent);
+  background: var(--accent-dim);
+}
+
+.badge.unknown {
+  color: var(--muted);
+  background: var(--neutral-bg);
+}
+
+/* --------------------------------------------------------------- responsive */
+
+@media (max-width: 760px) {
+  .compare-controls .field {
+    flex-basis: 40%;
+  }
+
+  .compare-controls button {
+    width: 100%;
+  }
+
+  .compare-stat {
+    flex: 1 1 40%;
+  }
+
+  .history-row {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 6px;
+  }
+
+  .history-row-meta {
+    justify-content: flex-start;
+  }
+}
+
+/* Narrow screens: keep the comparison tables scrollable and compact. */
+@media (max-width: 520px) {
+  .compare-table th,
+  .compare-table td {
+    padding: 8px 10px;
+  }
+
+  .compare-file {
+    max-width: 180px;
+  }
+
+  .diff-list {
+    gap: 6px 14px;
+  }
+
+  .compare-group-head {
+    flex-wrap: wrap;
+  }
+
+  .compare-warnings {
+    padding: 12px;
+  }
+}

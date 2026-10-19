@@ -35,6 +35,53 @@ async def test_browser_assets_and_session(client):
     assert (await client.get("/api/report")).status_code == 404
 
 
+@pytest.mark.parametrize("path", [
+    "/static/app.js",
+    "/static/styles.css",
+    "/static/lib/api.js",
+    "/static/lib/dom.js",
+    "/static/lib/state.js",
+    "/static/lib/format.js",
+    "/static/lib/tree.js",
+    "/static/lib/graph.js",
+    "/static/views/overview.js",
+    "/static/views/findings.js",
+    "/static/views/map.js",
+    "/static/views/dependencies.js",
+    "/static/views/coverage.js",
+    "/static/views/history.js",
+    "/static/styles/overview.css",
+    "/static/styles/findings.css",
+    "/static/styles/map.css",
+    "/static/styles/dependencies.css",
+    "/static/styles/coverage.css",
+    "/static/styles/history.css",
+])
+async def test_static_modules_are_served(client, path):
+    response = await client.get(path)
+    assert response.status_code == 200, path
+    assert response.headers["cache-control"] == "no-store"
+    expected = "text/css" if path.endswith(".css") else "text/javascript"
+    assert response.headers["content-type"].startswith(expected)
+
+
+async def test_static_serving_rejects_escapes_and_missing_files(client):
+    assert (await client.get("/static/../harness.py")).status_code in (403, 404)
+    assert (await client.get("/static/lib/%2e%2e/%2e%2e/harness.py")).status_code in (403, 404)
+    assert (await client.get("/static/views/missing.js")).status_code == 404
+
+
+async def test_index_references_served_entry_points(client):
+    html = (await client.get("/")).text
+    assert 'src="/static/app.js"' in html
+    assert 'href="/styles.css"' in html
+    # CSP allows same-origin files only: every script must have a src and no
+    # element may carry a style attribute.
+    import re
+    assert all("src=" in tag for tag in re.findall(r"<script\b[^>]*>", html))
+    assert "style=" not in html.lower()
+
+
 async def test_scan_and_report_are_read_only(client, tmp_path):
     def snapshot():
         return {file.name: hashlib.sha256(file.read_bytes()).hexdigest() for file in tmp_path.iterdir() if file.is_file()}

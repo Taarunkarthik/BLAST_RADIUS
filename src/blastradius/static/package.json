@@ -1,0 +1,6 @@
+{
+  "name": "blastradius-static",
+  "private": true,
+  "type": "module",
+  "description": "Browser assets for the BlastRadius local harness. No dependencies; this file only marks .js files as ES modules for node --check."
+}
