@@ -1,453 +1,342 @@
-/* Overview view — dashboard cards, severity donut, impact list. */
+/* Overview view — Swiss impact-first dashboard.
+   Source of truth: preview.html (Overview section). Colours come only from
+   styles.css tokens; severity hues appear solely on severity elements. */
 
-.overview-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 20px;
-  margin-top: 18px;
+/* Severity stack inside the issues metric — spans carry width classes. */
+.stack > span {
+  flex: none;
 }
 
-.overview-body {
-  padding: 20px 22px;
+/* ---------------------------------------------------------------- donut */
+
+.donut-layout {
+  display: grid;
+  grid-template-columns: minmax(150px, 184px) minmax(0, 1fr);
+  gap: 20px;
+  align-items: center;
+}
+
+.donut-svg {
+  width: 100%;
+  height: auto;
+  display: block;
+}
+
+.donut-seg {
+  fill: none;
+  stroke-width: 26;
+}
+
+.donut-stroke-high {
+  stroke: var(--sev-high);
+}
+
+.donut-stroke-medium {
+  stroke: var(--sev-medium);
+}
+
+.donut-stroke-low {
+  stroke: var(--sev-low);
+}
+
+.donut-seg.donut-empty {
+  stroke: var(--muted-2);
+}
+
+.donut-center-value {
+  font: 700 38px/1 var(--mono);
+  letter-spacing: -0.06em;
+  fill: var(--fg);
+}
+
+.donut-center-label {
+  font: 8px/1 var(--mono);
+  letter-spacing: 0.15em;
+  fill: var(--muted);
+}
+
+.donut-legend {
   display: flex;
   flex-direction: column;
+}
+
+.donut-row {
+  display: grid;
+  grid-template-columns: 10px minmax(0, 1fr) auto auto;
+  gap: 8px;
+  align-items: center;
+  padding: 7px 0;
+  border-top: 1px solid var(--rule);
+  font: 10px/1.2 var(--mono);
+}
+
+.donut-row:last-child {
+  border-bottom: 1px solid var(--rule);
+}
+
+.donut-row .count {
+  font-weight: 700;
+  text-align: right;
+}
+
+.donut-row .pct {
+  color: var(--muted);
+  text-align: right;
+}
+
+/* ---------------------------------------------------------- leaderboard */
+
+.leaderboard {
+  display: flex;
+  flex-direction: column;
+}
+
+.leader-head,
+.leader-row {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr) 92px 54px;
   gap: 12px;
-  align-items: flex-start;
+  align-items: center;
 }
 
-.overview-body > p,
-.overview-body > h3,
-.overview-body > ul {
-  margin: 0;
+.leader-head {
+  padding-bottom: 7px;
+  font: 8px/1 var(--mono);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--muted);
 }
 
-/* Partial-scan banner */
+.leader-row {
+  width: 100%;
+  min-height: 56px;
+  padding: 7px 4px 7px 0;
+  border-top: 1px solid var(--rule);
+  font-family: var(--mono);
+}
+
+.leader-row:hover {
+  background: var(--panel-2);
+}
+
+.leader-rank {
+  font-size: 10px;
+  color: var(--muted);
+  letter-spacing: 0.02em;
+}
+
+.leader-main {
+  min-width: 0;
+}
+
+.leader-path {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 11.5px;
+  line-height: 1.3;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.leader-note {
+  margin-top: 3px;
+  font-size: 9px;
+  line-height: 1.3;
+  letter-spacing: 0.03em;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.blast-scale {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(6px, 1fr));
+  gap: 2px;
+  width: 100%;
+}
+
+.blast-scale span {
+  display: block;
+  height: 6px;
+  border: 1px solid var(--rule);
+}
+
+.blast-scale span.on {
+  background: var(--fg);
+  border-color: var(--fg);
+}
+
+.leader-pct {
+  font-size: 10px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.leader-empty {
+  padding: 10px 0;
+  border-top: 1px solid var(--rule);
+  font: 10px/1.5 var(--mono);
+  color: var(--muted);
+}
+
+/* ------------------------------------------------------------- coverage */
+
+.coverage-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 13px;
+}
+
+.coverage-top {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 20px;
+}
+
+.coverage-big {
+  font: 700 42px/0.9 var(--mono);
+  letter-spacing: -0.06em;
+}
+
+.coverage-big .denom {
+  font-size: 17px;
+  color: var(--muted);
+  letter-spacing: -0.02em;
+}
+
+.coverage-bar {
+  display: flex;
+  height: 16px;
+  border: 1px solid var(--rule-strong);
+  background: var(--panel);
+  overflow: hidden;
+}
+
+.coverage-bar span {
+  display: block;
+  height: 100%;
+}
+
+/* The checked span takes a 5% width bucket (class-based, CSP-safe); the
+   unsupported span flexes into the remainder, so the split is exact for any
+   ratio without inline styles. */
+.coverage-bar .checked {
+  background: var(--fg);
+  flex: none;
+}
+
+.coverage-bar .unsupported {
+  background: var(--muted-2);
+  flex: 1 1 auto;
+}
+
+.coverage-meta {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  padding-top: 2px;
+}
+
+.cov-cell {
+  border-top: 1px solid var(--rule);
+  padding-top: 8px;
+}
+
+.cov-cell .key {
+  font: 8.5px/1.4 var(--mono);
+  letter-spacing: 0.11em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.cov-cell .val {
+  margin-top: 4px;
+  font: 15px/1 var(--mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.coverage-note {
+  font: 9.5px/1.5 var(--mono);
+  color: var(--muted);
+  letter-spacing: 0.02em;
+}
+
+/* ------------------------------------------------------ partial-scan banner */
 
 .overview-banner {
   display: flex;
   align-items: center;
-  gap: 14px;
-  margin-top: 23px;
-  padding: 14px 18px;
-  border: 1px solid var(--warn-soft-border);
-  border-left-width: 3px;
-  border-radius: var(--radius-sm);
-  background: var(--warn-soft-bg);
+  gap: 11px;
+  min-height: 38px;
+  margin-bottom: var(--gutter);
+  padding: 7px 9px 7px 11px;
+  border: 1px solid var(--rule-strong);
+  border-left-width: 4px;
+  background: var(--panel);
 }
 
 .overview-banner-mark {
-  font-size: 18px;
-  line-height: 1;
-  color: var(--medium);
+  width: 7px;
+  height: 7px;
+  flex: none;
+  background: var(--fg);
 }
 
 .overview-banner-copy {
   flex: 1;
   min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  align-items: baseline;
+  font: 10.5px/1.5 var(--mono);
+  letter-spacing: 0.035em;
+  text-transform: uppercase;
 }
 
 .overview-banner-copy strong {
-  display: block;
-  font-size: 12px;
-  color: var(--medium);
-  margin-bottom: 2px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
 }
 
-.overview-banner-copy p {
-  margin: 0;
-  font-size: 12px;
+.overview-banner-copy span {
   color: var(--muted);
-  line-height: 1.7;
+  text-transform: none;
+  letter-spacing: 0.015em;
 }
 
-/* Metrics row */
-
-.metrics {
-  display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: 16px;
-  margin: 23px 0;
-}
-
-.metric {
-  padding: 20px 23px;
-  border: 1px solid var(--line);
-  border-radius: 9px;
-  background: var(--panel);
-}
-
-.metric > span {
-  font-size: 12px;
-  color: var(--muted);
-}
-
-.metric strong {
-  display: block;
-  font-size: 35px;
-  line-height: 1.3;
-  margin: 9px 0;
-  font-weight: 500;
-  letter-spacing: -1px;
-}
-
-.metric small {
-  font-size: 10px;
-  color: var(--muted);
-}
-
-.high-text {
-  color: var(--high);
-}
-
-/* Severity donut — inline SVG; geometry via attributes, colors via classes. */
-
-.overview-donut {
-  display: flex;
-  align-items: center;
-  gap: 18px;
-  width: 100%;
-}
-
-.overview-donut-canvas {
-  width: 116px;
-  height: 116px;
-  flex: none;
-}
-
-.donut-seg {
-  fill: none;
-  stroke-width: 14;
-}
-
-.donut-seg.donut-high {
-  stroke: var(--high);
-}
-
-.donut-seg.donut-medium {
-  stroke: var(--medium);
-}
-
-.donut-seg.donut-low {
-  stroke: var(--low);
-}
-
-.donut-seg.donut-empty {
-  stroke: var(--line-strong);
-}
-
-.donut-center {
-  fill: var(--text);
-  font-family: var(--sans);
-  font-size: 25px;
-  font-weight: 500;
-  letter-spacing: -1px;
-}
-
-.donut-legend {
-  margin: 0;
-  padding: 0;
-  list-style: none;
-  display: flex;
-  flex-direction: column;
-  gap: 9px;
-  flex: 1;
-  min-width: 0;
-}
-
-.donut-legend li {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 12px;
-  color: var(--muted);
-}
-
-.donut-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 999px;
-  flex: none;
-}
-
-.donut-dot.high {
-  background: var(--high);
-}
-
-.donut-dot.medium {
-  background: var(--medium);
-}
-
-.donut-dot.low {
-  background: var(--low);
-}
-
-.donut-share {
-  margin-left: auto;
-  color: var(--text);
-  font-variant-numeric: tabular-nums;
-}
-
-/* Coverage bar. Widths are class-based because the CSP forbids inline styles. */
-
-.overview-bar {
-  display: block;
-  height: 8px;
-  border-radius: 999px;
-  background: var(--sunken);
-  overflow: hidden;
-  width: 100%;
-}
-
-.overview-bar-fill {
-  display: block;
-  height: 100%;
-  border-radius: 999px;
-  background: var(--accent);
-}
-
-.overview-bar-fill.checked {
-  background: var(--accent);
-}
-
-.w-0 { width: 0%; }
-.w-5 { width: 5%; }
-.w-10 { width: 10%; }
-.w-15 { width: 15%; }
-.w-20 { width: 20%; }
-.w-25 { width: 25%; }
-.w-30 { width: 30%; }
-.w-35 { width: 35%; }
-.w-40 { width: 40%; }
-.w-45 { width: 45%; }
-.w-50 { width: 50%; }
-.w-55 { width: 55%; }
-.w-60 { width: 60%; }
-.w-65 { width: 65%; }
-.w-70 { width: 70%; }
-.w-75 { width: 75%; }
-.w-80 { width: 80%; }
-.w-85 { width: 85%; }
-.w-90 { width: 90%; }
-.w-95 { width: 95%; }
-.w-100 { width: 100%; }
-
-.overview-big {
-  font-size: 32px;
-  font-weight: 500;
-  letter-spacing: -1px;
-  line-height: 1.2;
-}
-
-.overview-facts {
-  display: flex;
-  gap: 26px;
-  flex-wrap: wrap;
-  width: 100%;
-}
-
-.overview-facts > div {
-  min-width: 62px;
-}
-
-.overview-facts strong {
-  display: block;
-  font-size: 20px;
-  font-weight: 500;
-  line-height: 1.3;
-}
-
-.overview-facts span {
-  font-size: 10px;
-  color: var(--muted);
-}
-
-.overview-subhead {
-  font-size: 10px;
-  letter-spacing: 1px;
-  text-transform: uppercase;
-  color: var(--muted);
-}
-
-.overview-hubs {
-  margin: 0;
-  padding-left: 18px;
-  font-size: 12px;
-  color: var(--muted);
-  line-height: 1.9;
-}
-
-/* Top blast radius list */
-
-.overview-impact-list {
-  gap: 8px;
-}
-
-.overview-impact {
-  display: block;
-  width: 100%;
-  text-align: left;
-  background: transparent;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-sm);
-  color: var(--text);
-  padding: 11px 13px;
-}
-
-.overview-impact:hover {
-  background: var(--hover-bg-soft);
-  border-color: var(--control-border);
-}
-
-.overview-impact-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  width: 100%;
-}
-
-.overview-impact-row .overview-finding-file {
-  flex: 1;
-  min-width: 0;
-}
-
-.overview-impact-rank {
-  font-family: var(--mono);
-  font-size: 10px;
-  color: var(--muted);
-  flex: none;
-}
-
-.overview-impact-type {
-  margin-left: auto;
-  max-width: 42%;
-  text-align: right;
-  font-family: var(--mono);
-  font-size: 10px;
-  color: var(--muted);
-  overflow-wrap: anywhere;
-  flex: none;
-}
-
-.overview-impact-metric {
-  display: block;
-  margin-top: 5px;
-  font-family: var(--mono);
-  font-size: 10px;
-  color: var(--accent);
-  font-variant-numeric: tabular-nums;
-  overflow-wrap: anywhere;
-}
-
-.overview-finding-file {
-  font-size: 12px;
-  font-weight: 550;
-  overflow-wrap: anywhere;
-}
+/* ------------------------------------------------------------------ meta */
 
 .overview-meta {
-  margin: 18px 0 0;
+  margin-top: 18px;
 }
 
-/* Welcome / empty dashboard */
+/* ------------------------------------------------------------ responsive */
 
-.overview-welcome {
-  padding: 40px 42px;
-  margin-top: 23px;
-}
-
-.overview-welcome-mark {
-  font-size: 46px;
-  line-height: 1;
-  color: var(--accent);
-  margin-bottom: 14px;
-}
-
-.overview-welcome h2 {
-  font-size: 20px;
-}
-
-.overview-welcome > p {
-  max-width: 62ch;
-  color: var(--muted);
-  font-size: 12px;
-  line-height: 1.9;
-}
-
-.overview-steps {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 18px;
-  margin: 26px 0 0;
-  padding: 0;
-  list-style: none;
-  counter-reset: step;
-}
-
-.overview-steps li {
-  border: 1px solid var(--line);
-  border-radius: var(--radius-sm);
-  background: var(--sunken);
-  padding: 16px;
-  counter-increment: step;
-}
-
-.overview-steps li::before {
-  content: "0" counter(step);
-  display: block;
-  font-family: var(--mono);
-  font-size: 10px;
-  color: var(--accent);
-  margin-bottom: 8px;
-}
-
-.overview-steps strong {
-  display: block;
-  font-size: 12px;
-  margin-bottom: 5px;
-}
-
-.overview-steps span {
-  font-size: 11px;
-  color: var(--muted);
-  line-height: 1.8;
-}
-
-@media (max-width: 1150px) {
-  .overview-grid {
+@media (max-width: 640px) {
+  .donut-layout {
     grid-template-columns: 1fr;
   }
 
-  .metrics {
-    gap: 10px;
+  .donut-svg {
+    max-width: 170px;
+    margin: 0 auto;
   }
 
-  .metric {
-    padding: 16px;
-  }
-}
-
-@media (max-width: 760px) {
-  .metrics {
-    grid-template-columns: 1fr 1fr;
-    gap: 10px;
+  .leader-head,
+  .leader-row {
+    grid-template-columns: 24px minmax(0, 1fr) 70px 44px;
+    gap: 8px;
   }
 
-  .metric strong {
-    font-size: 28px;
-  }
-
-  .metric small {
-    font-size: 9px;
-  }
-
-  .overview-steps {
-    grid-template-columns: 1fr;
-  }
-
-  .overview-donut {
-    flex-direction: column;
+  .coverage-top {
     align-items: flex-start;
+    flex-direction: column;
+    gap: 12px;
   }
 
   .overview-banner {
@@ -455,34 +344,14 @@
   }
 }
 
-/* Narrow phones: shrink the donut, stack the impact rows and give the legend
-   the full width so the dashboard never scrolls sideways. */
-@media (max-width: 520px) {
-  .overview-welcome {
-    padding: 28px 22px;
+@media (max-width: 460px) {
+  .leader-head,
+  .leader-row {
+    grid-template-columns: 20px minmax(0, 1fr) 58px 40px;
+    gap: 6px;
   }
 
-  .overview-donut {
-    gap: 14px;
-  }
-
-  .overview-donut-canvas {
-    width: 96px;
-    height: 96px;
-  }
-
-  .donut-legend {
-    width: 100%;
-  }
-
-  .overview-impact-row {
-    flex-wrap: wrap;
-  }
-
-  .overview-impact-type {
-    flex-basis: 100%;
-    max-width: 100%;
-    margin-left: 0;
-    text-align: left;
+  .coverage-meta {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }

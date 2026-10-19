@@ -1,30 +1,42 @@
 /**
- * Dependencies — inline SVG graph + node inspector for the JS/TS import graph.
+ * Dependencies — inline SVG import graph + node inspector.
  *
  * Contract: export function render(container, ctx)
  * ctx = { state, api, node, notify, format, tree, graph, setState, view }
  *
- * The graph is plain SVG positioned by `lib/graph.js` layeredLayout: without a
- * focus, layers follow longest-path depth; with one, layers are reverse-BFS
- * distance ("blast radius"). Node kinds get distinct shapes — files are
- * circles, packages squares, unresolved specifiers triangles. Cycles are safe:
- * layout passes are capped in lib/graph.js, blastRadius tracks visited nodes,
- * and every render loop below is bounded.
+ * Swiss port of preview.html's Dependencies view. The graph is plain SVG
+ * positioned by `lib/graph.js` layeredLayout: without a focus, layers follow
+ * longest-path depth; with one, layers are reverse-BFS distance ("blast
+ * radius"). Node kinds get distinct shapes — files are squares, packages are
+ * diamonds, unresolved specifiers are triangles — drawn with 1px rule-strong
+ * strokes on a node-fill surface. Severity colour appears only on fills that
+ * encode a finding's severity (`.sev-high` / `.sev-medium` / `.sev-low`).
  *
- * Zoom is applied through the SVG width/height attributes (never inline
- * styles) and survives re-renders via the canvas' data-zoom attribute.
+ * Edges are orthogonal (H / V / HVH) with arrowheads; edges incident to the
+ * focus node or inside its blast radius render in --fg, everything else dims.
+ * Clicking a node sets `graphFocus` (shared with Map) and toggles off when
+ * clicked again. Cycles are safe: layout passes are capped in lib/graph.js,
+ * blastRadius tracks visited nodes, and every render loop below is bounded.
+ *
+ * Zoom is applied through the SVG width/height attributes and survives
+ * re-renders via the canvas' data attributes.
  */
 
 import { el, svg, emptyState } from '../lib/dom.js';
-import { issueId, number, truncate } from '../lib/format.js';
+import { SEVERITIES, issueId, number, plural, severityRank, truncate } from '../lib/format.js';
 
 const MAX_RENDERED = 300;
 const MAX_LABELS = 60;
+const MAX_INDEX = 200;
+const MAX_LIST = 100;
 const MIN_ZOOM = 0.4;
 const MAX_ZOOM = 2.5;
 const ZOOM_STEP = 1.25;
 const CANVAS_WIDTH = 980;
 const CANVAS_HEIGHT = 520;
+
+// Edge start/end padding per node kind, so lines meet shape borders.
+const KIND_PAD = { file: 14, package: 20, unresolved: 18 };
 
 // Caret position survives the re-render caused by typing in the filter.
 let caret = null;
@@ -35,15 +47,15 @@ function clampZoom(value) {
   return Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, numeric));
 }
 
-// Zoom lives on the canvas element so re-renders (node clicks, filtering)
+// Zoom lives on the SVG element so re-renders (node clicks, filtering)
 // keep the scale without module-level mutable state.
 function zoomOf(container) {
-  const canvas = container.querySelector('svg.deps-canvas');
+  const canvas = container.querySelector('svg.dep-svg');
   return canvas ? clampZoom(canvas.dataset.zoom) : 1;
 }
 
 function applyZoom(container, zoom) {
-  const canvas = container.querySelector('svg.deps-canvas');
+  const canvas = container.querySelector('svg.dep-svg');
   if (!canvas) return;
   const next = clampZoom(zoom);
   const width = Number(canvas.dataset.width) || CANVAS_WIDTH;
@@ -51,15 +63,13 @@ function applyZoom(container, zoom) {
   canvas.setAttribute('width', String(Math.round(width * next)));
   canvas.setAttribute('height', String(Math.round(height * next)));
   canvas.dataset.zoom = String(next);
-  const range = container.querySelector('.deps-zoom-range');
-  if (range) range.value = String(next);
-  const label = container.querySelector('.deps-zoom-value');
+  const label = container.querySelector('.dep-zoom-value');
   if (label) label.textContent = `${Math.round(next * 100)}%`;
 }
 
 /**
  * The focused node. Clicks set `graphFocus` (shared with Map); `dependencyFocus`
- * is still honoured because Findings and Map deep-link into this view with it.
+ * is still honoured because Map deep-links into this view with it.
  */
 function resolveFocus(state, graph, lib) {
   const fromGraph = state.graphFocus && graph.has(state.graphFocus) ? lib.nodeId(state.graphFocus) : null;
@@ -69,42 +79,79 @@ function resolveFocus(state, graph, lib) {
   return null;
 }
 
-/** Distinct shape per node kind: circle (file), square (package), triangle (unresolved). */
-function nodeShape(kind, x, y, r) {
-  if (kind === 'package') {
-    const side = r * 1.9;
-    return svg('rect', { class: `deps-shape ${kind}`, x: x - side / 2, y: y - side / 2, width: side, height: side, rx: 2 });
+/**
+ * Worst finding severity per node id. A finding contributes to its file node,
+ * to `package:<target>` for package findings and to
+ * `unresolved:<file>:<target>` for specifier findings. Nodes without a
+ * matching finding get no severity and keep the neutral node fill.
+ */
+function severityByNode(graph, lib, report) {
+  const ranks = new Map();
+  for (const issue of report?.issues ?? []) {
+    const severity = severityRank(issue?.severity);
+    if (severity >= SEVERITIES.length) continue;
+    for (const id of [
+      lib.nodeId(issue?.file),
+      `package:${issue?.target ?? ''}`,
+      `unresolved:${issue?.file ?? ''}:${issue?.target ?? ''}`,
+    ]) {
+      if (!id || !graph.nodeSet.has(id)) continue;
+      const current = ranks.get(id);
+      if (current === undefined || severity < current) ranks.set(id, severity);
+    }
   }
-  if (kind === 'unresolved') {
-    const w = r * 1.1;
-    return svg('polygon', { class: `deps-shape ${kind}`, points: `${x},${y - w} ${x + w},${y + w * 0.8} ${x - w},${y + w * 0.8}` });
-  }
-  return svg('circle', { class: `deps-shape ${kind}`, cx: x, cy: y, r });
+  return ranks;
 }
 
-/** Quadratic curve so bidirectional (cyclic) edges stay distinguishable. */
+/** Distinct shape per node kind: square (file), diamond (package), triangle (unresolved). */
+function nodeShape(kind, x, y, severity) {
+  const sevClass = severity === null || severity === undefined ? '' : ` sev-${SEVERITIES[severity]}`;
+  if (kind === 'package') {
+    return svg('path', {
+      class: `dep-shape${sevClass}`,
+      d: 'M 0 -18 L 18 0 L 0 18 L -18 0 Z',
+      transform: `translate(${x} ${y})`,
+    });
+  }
+  if (kind === 'unresolved') {
+    return svg('path', {
+      class: `dep-shape${sevClass}`,
+      d: 'M 0 -17 L 17 14 L -17 14 Z',
+      transform: `translate(${x} ${y})`,
+    });
+  }
+  return svg('rect', { class: `dep-shape${sevClass}`, x: x - 13, y: y - 13, width: 26, height: 26 });
+}
+
+/** Orthogonal routing: straight H, straight V, or an HVH elbow. */
 function edgePath(from, to) {
-  const dx = to.x - from.x;
-  const dy = to.y - from.y;
-  const length = Math.hypot(dx, dy) || 1;
-  const offset = Math.min(36, length * 0.18);
-  const cx = (from.x + to.x) / 2 - (dy / length) * offset;
-  const cy = (from.y + to.y) / 2 + (dx / length) * offset;
-  return `M ${from.x} ${from.y} Q ${cx} ${cy} ${to.x} ${to.y}`;
+  const startPad = KIND_PAD[from.kind] ?? 14;
+  const endPad = KIND_PAD[to.kind] ?? 14;
+  if (Math.abs(from.y - to.y) < 3) {
+    const direction = to.x >= from.x ? 1 : -1;
+    return `M ${from.x + direction * startPad} ${from.y} H ${to.x - direction * endPad}`;
+  }
+  if (Math.abs(from.x - to.x) < 3) {
+    const direction = to.y >= from.y ? 1 : -1;
+    return `M ${from.x} ${from.y + direction * startPad} V ${to.y - direction * endPad}`;
+  }
+  const direction = to.x >= from.x ? 1 : -1;
+  const midX = (from.x + to.x) / 2;
+  return `M ${from.x + direction * startPad} ${from.y} H ${midX} V ${to.y} H ${to.x - direction * endPad}`;
 }
 
 function listBlock(title, subtitle, ids, ctx, onSelect) {
-  const section = el('div', { className: 'deps-block' });
+  const section = el('div', { className: 'dep-block' });
   section.append(el('h3', { text: title }), el('p', { text: subtitle, className: 'note' }));
   if (!ids.length) {
     section.append(el('p', { text: 'None', className: 'note' }));
     return section;
   }
-  const list = el('ul', { className: 'deps-list' });
-  for (const id of ids.slice(0, 100)) {
+  const list = el('ul', { className: 'dep-list' });
+  for (const id of ids.slice(0, MAX_LIST)) {
     const item = el('li');
     const button = el('button', {
-      className: 'deps-link',
+      className: 'dep-link',
       type: 'button',
       on: { click: () => onSelect(id) },
     });
@@ -116,8 +163,8 @@ function listBlock(title, subtitle, ids, ctx, onSelect) {
     list.append(item);
   }
   section.append(list);
-  if (ids.length > 100) {
-    section.append(el('p', { text: `Showing 100 of ${number(ids.length)}. Export JSON for the full graph.`, className: 'note' }));
+  if (ids.length > MAX_LIST) {
+    section.append(el('p', { text: `Showing ${MAX_LIST} of ${number(ids.length)}.`, className: 'note' }));
   }
   return section;
 }
@@ -129,11 +176,21 @@ export function render(container, ctx) {
   const zoom = zoomOf(container);
   container.replaceChildren();
 
-  if (!report || !raw || !raw.nodes?.length) {
+  if (!report) {
     emptyState(
       container,
       'No dependencies to inspect',
-      'This report has no dependency graph. Run a full or structure scan to see dependencies.',
+      'Run a scan to build the import graph for this workspace.',
+      '⇄',
+    );
+    return;
+  }
+
+  if (!raw || !raw.nodes?.length) {
+    emptyState(
+      container,
+      'No dependency graph in this report',
+      'Health scans and repositories without JS/TS sources do not build an import graph. Run a full or structure scan to see dependencies.',
       '⇄',
     );
     return;
@@ -142,50 +199,72 @@ export function render(container, ctx) {
   const graph = ctx.graph.buildGraph(raw);
   const focus = resolveFocus(state, graph, ctx.graph);
   const radius = focus ? ctx.graph.blastRadius(graph, focus.id) : null;
+  const severityOf = severityByNode(graph, ctx.graph, report);
 
-  const shell = el('section', { className: 'panel deps-panel' });
+  const layout = el('div', { className: 'dep-layout' });
+  const shell = el('section', { className: 'panel dep-panel' });
+
   const heading = el('div', { className: 'panel-heading' });
   const copy = el('div');
   copy.append(el('h2', { text: 'Dependencies' }), el('p', { text: 'Direct imports and importers for any node' }));
-  heading.append(copy, el('span', { className: 'pill', text: `${number(graph.nodes.length)} nodes · ${number(graph.edges.length)} edges` }));
+  const summary = ctx.graph.graphSummary(graph);
+  heading.append(copy, el('span', {
+    className: 'pill',
+    text: [
+      `${number(summary.files)} ${plural(summary.files, 'FILE')}`,
+      `${number(summary.edges)} ${plural(summary.edges, 'EDGE')}`,
+      `${number(summary.packages)} ${plural(summary.packages, 'PACKAGE')}`,
+    ].join(' · '),
+  }));
   shell.append(heading);
 
   if (report.scan?.partial || report.scan?.graph_partial) {
-    shell.append(el('div', {
-      className: 'deps-banner',
-      text: 'Partial scan — coverage or graph information is incomplete. Open Coverage for the details.',
-    }));
+    const banner = el('div', { className: 'dep-banner' });
+    banner.append(
+      el('strong', { text: 'Partial scan' }),
+      el('span', { text: 'Coverage or graph information is incomplete; the blast radius may be smaller than reality.' }),
+      el('button', {
+        className: 'secondary',
+        type: 'button',
+        text: 'Open Coverage',
+        on: { click: () => ctx.view('coverage') },
+      }),
+    );
+    shell.append(banner);
   }
 
-  const controls = el('div', { className: 'deps-controls' });
+  const controls = el('div', { className: 'dep-toolbar' });
+  controls.append(el('span', { className: 'dep-hint', text: 'Blast flow / select a node' }));
   const search = el('input', {
-    className: 'deps-search',
+    className: 'dep-search',
     value: state.dependencyQuery ?? '',
-    attrs: { 'aria-label': 'Search nodes', placeholder: 'Filter by path, package or specifier…', autocomplete: 'off', spellcheck: 'false' },
+    attrs: {
+      type: 'search',
+      'aria-label': 'Search nodes',
+      placeholder: 'Filter nodes…',
+      autocomplete: 'off',
+      spellcheck: 'false',
+    },
   });
-  const zoomGroup = el('div', { className: 'deps-zoom' });
-  const zoomOut = el('button', {
-    className: 'secondary',
-    type: 'button',
-    text: '−',
-    attrs: { 'aria-label': 'Zoom out' },
-    on: { click: () => applyZoom(container, zoomOf(container) / ZOOM_STEP) },
-  });
-  const range = el('input', {
-    className: 'deps-zoom-range',
-    attrs: { type: 'range', min: String(MIN_ZOOM), max: String(MAX_ZOOM), step: '0.1', value: String(zoom), 'aria-label': 'Zoom graph' },
-  });
-  range.addEventListener('input', () => applyZoom(container, Number(range.value)));
-  const zoomIn = el('button', {
-    className: 'secondary',
-    type: 'button',
-    text: '+',
-    attrs: { 'aria-label': 'Zoom in' },
-    on: { click: () => applyZoom(container, zoomOf(container) * ZOOM_STEP) },
-  });
-  const zoomValue = el('span', { className: 'deps-zoom-value', text: `${Math.round(zoom * 100)}%` });
-  zoomGroup.append(zoomOut, range, zoomIn, zoomValue);
-  controls.append(search, zoomGroup);
+  const zoomGroup = el('div', { className: 'dep-zoom' });
+  zoomGroup.append(
+    el('button', {
+      className: 'dep-zoom-btn',
+      type: 'button',
+      text: '−',
+      attrs: { 'aria-label': 'Zoom out' },
+      on: { click: () => applyZoom(container, zoomOf(container) / ZOOM_STEP) },
+    }),
+    el('span', { className: 'dep-zoom-value', text: `${Math.round(zoom * 100)}%` }),
+    el('button', {
+      className: 'dep-zoom-btn',
+      type: 'button',
+      text: '+',
+      attrs: { 'aria-label': 'Zoom in' },
+      on: { click: () => applyZoom(container, zoomOf(container) * ZOOM_STEP) },
+    }),
+  );
+  controls.append(el('span', { className: 'dep-spacer' }), search, zoomGroup);
   if (focus) {
     controls.append(el('button', {
       className: 'secondary',
@@ -194,31 +273,34 @@ export function render(container, ctx) {
       on: { click: () => setState({ graphFocus: null, dependencyFocus: null }) },
     }));
   }
+  controls.append(el('span', { className: 'dep-hint', text: `${number(graph.nodes.length)} nodes` }));
   shell.append(controls);
 
   const rendered = new Set(graph.nodes.slice(0, MAX_RENDERED));
   if (focus) rendered.add(focus.id);
   const visibleEdges = graph.edges.filter(edge => rendered.has(edge.source) && rendered.has(edge.target));
-  const layout = ctx.graph.layeredLayout(graph, {
+  const graphLayout = ctx.graph.layeredLayout(graph, {
     focus: focus ? focus.id : null,
     nodes: [...rendered],
     width: CANVAS_WIDTH,
     height: CANVAS_HEIGHT,
   });
 
+  const stage = el('div', { className: 'dep-stage' });
   const canvas = svg('svg', {
-    class: 'deps-canvas',
-    viewBox: `0 0 ${layout.width} ${layout.height}`,
-    width: Math.round(layout.width * zoom),
-    height: Math.round(layout.height * zoom),
+    class: 'dep-svg',
+    viewBox: `0 0 ${graphLayout.width} ${graphLayout.height}`,
+    width: Math.round(graphLayout.width * zoom),
+    height: Math.round(graphLayout.height * zoom),
     role: 'img',
-    'aria-label': `JS/TS dependency graph with ${graph.nodes.length} nodes`,
+    'aria-label': `Dependency graph with ${number(graph.nodes.length)} nodes`,
     'data-zoom': zoom,
-    'data-width': layout.width,
-    'data-height': layout.height,
+    'data-width': graphLayout.width,
+    'data-height': graphLayout.height,
   });
+
   const defs = svg('defs');
-  for (const [id, hot] of [['deps-arrow', false], ['deps-arrow-hot', true]]) {
+  for (const [id, hot] of [['dep-arrow', false], ['dep-arrow-hot', true]]) {
     const marker = svg('marker', {
       id,
       viewBox: '0 0 10 10',
@@ -228,63 +310,88 @@ export function render(container, ctx) {
       markerHeight: 6,
       orient: 'auto',
     });
-    marker.append(svg('path', { d: 'M 0 0 L 10 5 L 0 10 z', class: hot ? 'deps-arrowhead hot' : 'deps-arrowhead' }));
+    marker.append(svg('path', { d: 'M 0 0 L 10 5 L 0 10 z', class: hot ? 'dep-arrowhead hot' : 'dep-arrowhead' }));
     defs.append(marker);
   }
-  const edgeLayer = svg('g', { class: 'deps-edges' });
-  const nodeLayer = svg('g', { class: 'deps-nodes' });
+  const edgeLayer = svg('g', { class: 'dep-edges' });
+  const nodeLayer = svg('g', { class: 'dep-nodes' });
   canvas.append(defs, edgeLayer, nodeLayer);
+  stage.append(canvas);
+  shell.append(stage);
 
-  const radiusSet = new Set(radius?.affected ?? []);
-  const directSet = new Set(radius?.direct ?? []);
-  const weightOf = id => Math.min(9, 4 + Math.sqrt((graph.incoming.get(id) ?? []).length) * 2);
+  const active = new Set(focus ? [focus.id, ...(radius?.affected ?? [])] : []);
 
   for (const edge of visibleEdges) {
-    const from = layout.positions.get(edge.source);
-    const to = layout.positions.get(edge.target);
+    const from = graphLayout.positions.get(edge.source);
+    const to = graphLayout.positions.get(edge.target);
     if (!from || !to) continue;
-    const hot = Boolean(radius) && (edge.source === focus.id || edge.target === focus.id);
-    const inRadius = Boolean(radius) && !hot && radiusSet.has(edge.source) && radiusSet.has(edge.target);
-    const className = hot ? 'deps-edge hot' : inRadius ? 'deps-edge radius' : 'deps-edge';
+    const incident = Boolean(radius) && (edge.source === focus.id || edge.target === focus.id);
+    const within = Boolean(radius) && !incident && active.has(edge.source) && active.has(edge.target);
+    const hot = incident || within;
+    const className = hot ? 'dep-edge is-impact' : 'dep-edge is-dim';
     if (edge.source === edge.target) {
-      const r = weightOf(edge.source);
-      edgeLayer.append(svg('circle', { class: className, cx: from.x, cy: from.y - r * 2.1, r: Math.max(3, r * 0.5) }));
+      edgeLayer.append(svg('circle', { class: className, cx: from.x, cy: from.y - 30, r: 8 }));
       continue;
     }
     edgeLayer.append(svg('path', {
       class: className,
-      d: edgePath(from, to),
-      'marker-end': hot ? 'url(#deps-arrow-hot)' : 'url(#deps-arrow)',
+      d: edgePath(
+        { x: from.x, y: from.y, kind: ctx.graph.nodeKind(edge.source) },
+        { x: to.x, y: to.y, kind: ctx.graph.nodeKind(edge.target) },
+      ),
+      'marker-end': hot ? 'url(#dep-arrow-hot)' : 'url(#dep-arrow)',
     }));
   }
 
-  const labelled = radius
-    ? new Set([focus.id, ...radius.direct, ...radius.affected])
-    : new Set(ctx.graph.mostDependedOn(graph, 8).map(item => item.id));
+  // Labels are a budgeted resource: the focus node first, then its blast
+  // radius. Small graphs label every node, as in the preview; large graphs
+  // fall back to the most-depended-on nodes.
+  const labelled = new Set();
+  if (focus) labelled.add(focus.id);
   let labelBudget = MAX_LABELS;
+  const candidates = radius
+    ? [...radius.direct, ...radius.affected]
+    : (graph.nodes.length <= MAX_LABELS
+      ? [...graph.nodes]
+      : ctx.graph.mostDependedOn(graph, 8).map(item => item.id));
+  for (const id of candidates) {
+    if (labelBudget <= 0) break;
+    if (!labelled.has(id)) {
+      labelled.add(id);
+      labelBudget -= 1;
+    }
+  }
 
   for (const id of rendered) {
-    const position = layout.positions.get(id);
+    const position = graphLayout.positions.get(id);
     if (!position) continue;
     const kind = ctx.graph.nodeKind(id);
-    const r = weightOf(id);
-    let className = 'deps-node';
-    if (focus && id === focus.id) className += ' focus';
-    else if (directSet.has(id)) className += ' direct';
-    else if (radiusSet.has(id)) className += ' affected';
-    else if (radius) className += ' dimmed';
+    let className = 'dep-node';
+    if (focus && id === focus.id) className += ' is-selected';
+    else if (active.has(id)) className += ' is-impact';
+    else if (focus) className += ' is-dim';
 
-    const group = svg('g', { class: className, tabindex: '0', role: 'button' });
-    group.append(nodeShape(kind, position.x, position.y, r));
+    const group = svg('g', {
+      class: className,
+      tabindex: '0',
+      role: 'button',
+      'aria-label': `${kind} ${ctx.graph.nodeLabel(id)}`,
+    });
+    group.append(nodeShape(kind, position.x, position.y, severityOf.get(id) ?? null));
     group.append(svg('title', {}, `${id} — ${number((graph.incoming.get(id) ?? []).length)} dependents`));
-    if (labelBudget > 0 && labelled.has(id)) {
-      labelBudget -= 1;
+    if (labelled.has(id)) {
       group.append(svg('text', {
         x: position.x,
-        y: position.y + r + 12,
-        class: 'deps-label',
+        y: position.y + 32,
+        class: 'dep-label',
         'text-anchor': 'middle',
       }, truncate(ctx.graph.nodeLabel(id), 26)));
+      group.append(svg('text', {
+        x: position.x,
+        y: position.y + 43,
+        class: 'dep-type',
+        'text-anchor': 'middle',
+      }, kind.toUpperCase()));
     }
     group.addEventListener('click', () => activate(id));
     group.addEventListener('keydown', event => {
@@ -296,63 +403,82 @@ export function render(container, ctx) {
     nodeLayer.append(group);
   }
 
-  const scroll = el('div', { className: 'deps-canvas-scroll' });
-  scroll.append(canvas);
-  shell.append(scroll);
-
-  const legend = el('div', { className: 'deps-legend' });
-  for (const [kind, label] of [['file', 'file'], ['package', 'package'], ['unresolved', 'unresolved import']]) {
-    const item = el('span', { className: 'deps-legend-item' });
-    const swatch = svg('svg', { class: 'deps-legend-swatch', viewBox: '0 0 20 20', 'aria-hidden': 'true' });
-    swatch.append(nodeShape(kind, 10, 10, 5.5));
+  const legend = el('div', { className: 'dep-legend' });
+  for (const [kind, label] of [['file', 'File'], ['package', 'Package'], ['unresolved', 'Unresolved']]) {
+    const item = el('span', { className: 'dep-legend-item' });
+    const swatch = svg('svg', { class: 'dep-legend-shape', viewBox: '0 0 14 14', 'aria-hidden': 'true' });
+    const path = kind === 'file'
+      ? svg('rect', { x: 2.5, y: 2.5, width: 9, height: 9 })
+      : svg('path', { d: kind === 'package' ? 'M7 1.5 12.5 7 7 12.5 1.5 7Z' : 'M7 2 13 12H1Z' });
+    path.setAttribute('fill', 'none');
+    path.setAttribute('stroke', 'currentColor');
+    swatch.append(path);
     item.append(swatch, el('span', { text: label }));
+    legend.append(item);
+  }
+  for (const severity of ['high', 'medium', 'low']) {
+    const item = el('span', { className: 'dep-legend-item' });
+    item.append(
+      el('span', { className: `sev-swatch sev-${severity}` }),
+      el('span', { text: severity }),
+    );
     legend.append(item);
   }
   shell.append(legend);
 
-  const body = el('div', { className: 'deps-body' });
-  shell.append(body);
+  const side = el('div', { className: 'dep-side' });
+  layout.append(shell, side);
+  container.append(layout);
 
   const query = String(state.dependencyQuery ?? '').trim().toLowerCase();
   const matches = (query
     ? graph.nodes.filter(id => id.toLowerCase().includes(query))
-    : graph.nodes).slice(0, 200);
+    : graph.nodes).slice(0, MAX_INDEX);
 
-  const index = el('div', { className: 'deps-index' });
-  index.append(el('h3', { text: 'Nodes' }), el('p', { className: 'note', text: `${number(matches.length)} shown${query ? ` matching “${query}”` : ''}` }));
-  const indexList = el('ul', { className: 'deps-list deps-index-list' });
-  for (const id of matches) {
-    const item = el('li');
-    const button = el('button', {
-      className: `deps-link${focus && id === focus.id ? ' selected' : ''}`,
-      type: 'button',
-      attrs: { 'aria-pressed': focus && id === focus.id ? 'true' : 'false' },
-      on: { click: () => activate(id) },
-    });
-    button.append(
-      el('span', { text: truncate(ctx.graph.nodeLabel(id), 70), className: 'mono' }),
-      el('span', { text: ctx.graph.nodeKind(id), className: 'muted' }),
-    );
-    item.append(button);
-    indexList.append(item);
+  const index = el('section', { className: 'panel dep-index' });
+  const indexHead = el('div', { className: 'section-head' });
+  indexHead.append(
+    el('h2', { text: 'Nodes' }),
+    el('span', { className: 'meta', text: `${number(matches.length)} shown${query ? ` matching “${query}”` : ''}` }),
+  );
+  index.append(indexHead);
+  if (!matches.length) {
+    index.append(el('p', { className: 'note', text: 'No nodes match this filter.' }));
+  } else {
+    const indexList = el('ul', { className: 'dep-list' });
+    for (const id of matches) {
+      const item = el('li');
+      const button = el('button', {
+        className: `dep-link${focus && id === focus.id ? ' selected' : ''}`,
+        type: 'button',
+        attrs: { 'aria-pressed': focus && id === focus.id ? 'true' : 'false' },
+        on: { click: () => activate(id) },
+      });
+      button.append(
+        el('span', { text: truncate(ctx.graph.nodeLabel(id), 70), className: 'mono' }),
+        el('span', { text: ctx.graph.nodeKind(id), className: 'muted' }),
+      );
+      item.append(button);
+      indexList.append(item);
+    }
+    index.append(indexList);
   }
-  if (!matches.length) index.append(el('p', { text: 'No nodes match this filter.', className: 'note' }));
-  else index.append(indexList);
-  body.append(index);
+  side.append(index);
 
-  const detail = el('div', { className: 'deps-detail' });
+  const detail = el('section', { className: 'panel dep-detail' });
   if (!focus) {
     detail.append(el('p', {
       className: 'note',
       text: 'Select a node in the graph or the index to see its imports, importers and blast radius.',
     }));
   } else {
-    const header = el('div', { className: 'deps-focus' });
-    header.append(
-      el('span', { text: ctx.graph.nodeKind(focus.id), className: 'pill' }),
-      el('strong', { text: ctx.graph.nodeLabel(focus.id), className: 'mono' }),
+    const kind = ctx.graph.nodeKind(focus.id);
+    const focusHead = el('div', { className: 'dep-focus' });
+    focusHead.append(
+      el('span', { className: 'pill', text: kind }),
+      el('strong', { className: 'mono', text: truncate(ctx.graph.nodeLabel(focus.id), 70) }),
     );
-    detail.append(header);
+    detail.append(focusHead);
 
     const issue = ctx.graph.isFileNode(focus.id)
       ? (report.issues ?? []).find(item => `file:${item.file}` === focus.id)
@@ -361,26 +487,35 @@ export function render(container, ctx) {
       detail.append(el('button', {
         className: 'secondary',
         type: 'button',
-        text: `Open finding for ${issue.file}:${issue.line} →`,
+        text: `Open finding ${issue.file}:${issue.line} →`,
         on: { click: () => ctx.view('findings', issueId(issue)) },
       }));
     }
 
-    const facts = el('div', { className: 'deps-facts' });
+    const incident = graph.edges.filter(edge => edge.source === focus.id || edge.target === focus.id).length;
+    const stats = el('div', { className: 'dep-stats' });
     for (const [name, value] of [
-      ['Direct dependents', radius.direct.length],
-      ['Transitive dependents', radius.transitive.length],
       ['Blast radius', radius.affected.length],
+      ['Incident edges', incident],
+      ['Imports', graph.dependencies(focus.id).length],
+      ['Imported by', graph.dependents(focus.id).length],
     ]) {
-      const fact = el('div');
-      fact.append(el('strong', { text: number(value) }), el('span', { text: name }));
-      facts.append(fact);
+      const stat = el('div', { className: 'dep-stat' });
+      stat.append(el('span', { className: 'k', text: name }), el('strong', { className: 'v', text: number(value) }));
+      stats.append(stat);
     }
-    detail.append(facts);
+    detail.append(stats);
 
     const select = id => activate(id);
     detail.append(listBlock('Imports', 'Nodes this node points at', graph.dependencies(focus.id), ctx, select));
     detail.append(listBlock('Imported by', 'Nodes that depend on this one', graph.dependents(focus.id), ctx, select));
+    detail.append(listBlock(
+      'Blast radius',
+      `Reverse dependents — ${number(radius.direct.length)} direct · ${number(radius.transitive.length)} transitive`,
+      radius.affected,
+      ctx,
+      select,
+    ));
 
     if (radius.affected.length) {
       detail.append(el('button', {
@@ -391,8 +526,7 @@ export function render(container, ctx) {
       }));
     }
   }
-  body.append(detail);
-  container.append(shell);
+  side.append(detail);
 
   function activate(id) {
     if (focus && id === focus.id) {

@@ -12,19 +12,39 @@ blastradius harness --path /path/to/repository --port 8765
 
 Open the address printed by the command, normally [http://127.0.0.1:8765](http://127.0.0.1:8765). Keep the terminal running; Ctrl+C stops the server. The repository's `examples/demo` directory is a useful first scan: it contains five intentional findings and a Chart module with three dependent files.
 
+## Design
+
+The interface follows a Swiss / International Typographic style: a strict black, white, and grey palette, one grotesque type stack for copy, and monospace with tabular figures for every path, line number, issue type, id, and count. Structure comes from flat 1px rules and whitespace — there are no rounded corners, shadows, gradients, or blur. Colour is reserved for severity alone: red (high), yellow (medium), and blue (low) on badges, the severity donut, and graph node fills. Light is the default; the theme toggle inverts the same tokens for dark mode. Tokens live in `src/blastradius/static/styles.css`, shell chrome in `styles/shell.css`, and the module layout is described in `src/blastradius/static/CONTRACT.md`.
+
+## Shell
+
+Every view shares one shell:
+
+- **Project switcher** (top bar). The button shows the current scan path. Its menu lists recent folders (remembered in `localStorage`) and a live subfolder browser backed by `GET /api/directories?path=<relative-path>`, which returns the folders directly under that path — scoped to the harness root — plus the parent path. Selecting a folder sets the scan path; run a scan to load it. If the endpoint is unavailable the menu degrades to the recent-folder list and says so.
+- **Command palette** (Ctrl/Cmd-K, or the Commands button). Type to filter, arrow keys to move, Enter to run, Esc to close. Commands navigate to any view, toggle the theme, switch project, run a scan, and clear the findings filters.
+- **Theme toggle** (top bar). Light is the default; the choice persists in `localStorage` under `blastradius-theme`.
+- **Scan strip.** Choose the directory within the workspace and a mode (Full scan, Structure only, Health only), then Run scan. The notice banner reports progress and results, and Export JSON downloads the complete report.
+
 ## Inspect a scan
 
-1. Leave the directory as `.` or select a subdirectory within the startup root.
-2. Choose Full scan, Structure only, or Health only, then Run scan.
-3. **Overview** is the dashboard: a metrics row (files checked, issues, high severity, affected files), an inline SVG severity donut, a **Top blast radius** ranking of the failures with the widest reach, and coverage and dependency-graph summaries. A banner appears here when the scan is partial.
-4. **Findings** is the full diagnostic list. Search matches are highlighted; severity and **Tree impact only** filters and severity/file/impact sorting narrow the list. Selecting a finding opens a detail panel with a collapsible, colour-coded tree of its direct and transitive dependents, plus copy actions for the report ID and the CLI command.
-5. **Map** is the filesystem component tree: collapsible directories carry an aggregate severity, unchecked files are muted with their reason, and selecting a file shows a panel with its issues, imports, imported-by files, and blast radius.
-6. **Dependencies** draws the JS/TS import graph as an inline SVG — files, packages, and unresolved imports get distinct shapes — with zoom controls and click-to-highlight blast radius, a node index, and imports/imported-by tables.
-7. **Coverage** summarizes what was and was not checked with a stacked bar and clickable rows for unsupported, excluded, incomplete, and checked files.
-8. **Saved scans** lists saved scans and compares a base and head pair (see below).
-9. Export JSON to download the complete report.
+1. Leave the directory as `.` or select a subdirectory within the startup root, choose a mode, then Run scan.
+2. **Overview** is the impact-first dashboard: a metric strip (files checked, issues, high severity, affected files), an inline SVG severity donut, a **Top blast radius** leaderboard of the findings with the widest reach, and a coverage bar. A banner appears here when the scan is partial.
+3. **Findings** is the full diagnostic list in monospace with severity badges and highlighted search matches. Severity and **Tree impact only** filters and severity/file/impact sorting narrow the list; selecting a finding opens a detail panel with a terminal-style impact diagram of its direct and transitive dependents, plus copy actions for the report ID and the CLI command.
+4. **Map** is a DSA-style node-link tree of the scanned filesystem, drawn as inline SVG (see below).
+5. **Dependencies** draws the JS/TS import graph as an inline SVG — files are squares, packages are diamonds, and unresolved imports are triangles — with zoom controls and click-to-highlight blast radius, a node index, and imports/imported-by tables.
+6. **Coverage** summarizes what was and was not checked with a summary bar and grouped tables for unsupported, excluded, incomplete, and checked files; rows deep-link into Findings or the Map.
+7. **Saved scans** lists saved scans and compares a base and head pair in a flat diff table (see below).
+8. Export JSON to download the complete report.
 
-Sections use hash routes (`#overview`, `#findings`, `#findings/<finding-id>`, `#map`, `#dependencies`, `#coverage`, `#history`), so browser Back/Forward work and a reload restores the last report held in memory. Findings deep-link via `#findings/<finding-id>`, and unknown routes fall back to Overview. The UI is a small dependency-free ES-module app described in `src/blastradius/static/CONTRACT.md`.
+### The Map tree
+
+The Map is a tidy node-link tree: the real report's coverage lists and issues are folded into a directory-to-file tree, laid out so leaves sit in sequence and parents are centred, and painted in inline SVG. Folders are 1px rectangles (showing their aggregate severity and file count); files are 1px circles filled by severity. Unchecked, excluded, and skipped files are dashed and muted.
+
+Three orientations share one layout engine — **Top-down**, **Left-right**, and **Radial** — chosen from the toolbar; the linear orientations use orthogonal elbow connectors and the radial layout uses quadratic arcs. Folders collapse and expand by click (or Enter/Space; ArrowLeft/ArrowRight on a focused folder), and deep folders start collapsed so large trees stay readable. The toolbar zooms (− / + / FIT) and a search box finds a node by name or path, revealing and path-highlighting it (Enter cycles matches). Selecting a file opens a side panel with its issues, imports, imported-by files, and reverse blast radius (direct and transitive, with distances), plus buttons to open the finding in Findings or the file in Dependencies.
+
+## Routing
+
+Sections use hash routes (`#overview`, `#findings`, `#findings/<finding-id>`, `#map`, `#dependencies`, `#coverage`, `#history`), so browser Back/Forward work and a reload restores the last report held in memory. Findings deep-link via `#findings/<finding-id>`, and unknown routes fall back to Overview. Map and Dependencies share the selected node, so a file opened from one is already selected in the other. The UI is a small dependency-free ES-module app described in `src/blastradius/static/CONTRACT.md`.
 
 The browser paginates findings (30 per page), shows at most 200 dependency paths per finding, and shows the first 200 entries per coverage group. Each truncated view says so; JSON export retains the complete report. Health mode has no graph, and non-JS/TS findings explicitly show No Tree Impact. Partial scans show a coverage warning.
 

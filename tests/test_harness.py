@@ -24,6 +24,22 @@ async def client(repository):
         yield client
 
 
+@pytest.fixture
+async def tree_client(repository):
+    """A harness root with a couple of nested directories and loose files."""
+    root = repository({
+        "alpha/nested/deep.txt": "x",
+        "beta/file.txt": "y",
+        "zeta/inner/.keep": "",
+        "readme.md": "notes",
+    })
+    app = create_app(root, token="test-session")
+    async with httpx.AsyncClient(
+        transport=transport(app), base_url="http://127.0.0.1", headers={"x-blastradius-token": "test-session"}
+    ) as client:
+        yield client
+
+
 async def test_browser_assets_and_session(client):
     response = await client.get("/")
     assert response.status_code == 200
@@ -139,6 +155,66 @@ async def test_scanning_symlink_escape_is_rejected(client, tmp_path):
     except OSError:
         pytest.skip("Host does not permit symlinks")
     assert (await client.post("/api/scan", json={"path": "outside"})).status_code == 400
+
+
+async def test_directories_defaults_to_root(tree_client):
+    for params in ({}, {"path": "."}):
+        response = await tree_client.get("/api/directories", params=params)
+        assert response.status_code == 200, response.text
+        assert response.json() == {
+            "path": ".",
+            "parent": None,
+            "directories": [
+                {"name": "alpha", "path": "alpha"},
+                {"name": "beta", "path": "beta"},
+                {"name": "zeta", "path": "zeta"},
+            ],
+        }
+
+
+async def test_directories_nested_path_and_parent(tree_client):
+    response = await tree_client.get("/api/directories", params={"path": "alpha"})
+    assert response.status_code == 200, response.text
+    assert response.json() == {
+        "path": "alpha",
+        "parent": ".",
+        "directories": [{"name": "nested", "path": "alpha/nested"}],
+    }
+
+    response = await tree_client.get("/api/directories", params={"path": "alpha/nested"})
+    assert response.json() == {"path": "alpha/nested", "parent": "alpha", "directories": []}
+
+
+async def test_directories_rejects_escapes_files_and_missing(tree_client):
+    for path in ("..", "../..", "alpha/../..", "missing", "readme.md"):
+        response = await tree_client.get("/api/directories", params={"path": path})
+        assert response.status_code >= 400, path
+
+
+async def test_directories_sorted_and_directories_only(repository):
+    root = repository({
+        "mango/.keep": "",
+        "apple/.keep": "",
+        "banana/.keep": "",
+        "zebra.txt": "file",
+        "alpha.txt": "file",
+    })
+    app = create_app(root, token="test-session")
+    async with httpx.AsyncClient(
+        transport=transport(app), base_url="http://127.0.0.1", headers={"x-blastradius-token": "test-session"}
+    ) as browser:
+        data = (await browser.get("/api/directories")).json()
+    assert [item["name"] for item in data["directories"]] == ["apple", "banana", "mango"]
+    assert all((root / item["path"]).is_dir() for item in data["directories"])
+
+
+async def test_directories_skips_symlinks_outside_root(tree_client, tmp_path):
+    try:
+        (tmp_path / "escape").symlink_to(tmp_path.parent, target_is_directory=True)
+    except OSError:
+        pytest.skip("Host does not permit symlinks")
+    data = (await tree_client.get("/api/directories")).json()
+    assert "escape" not in [item["name"] for item in data["directories"]]
 
 
 async def test_save_requires_current_report_and_database(client, monkeypatch):

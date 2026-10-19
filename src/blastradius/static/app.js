@@ -1,5 +1,5 @@
 /**
- * BlastRadius browser harness — bootstrap and router only.
+ * BlastRadius browser harness — shell, bootstrap and router.
  *
  * ---------------------------------------------------------------------------
  * VIEW CONTRACT
@@ -11,9 +11,9 @@
  * `container` is an empty HTMLElement owned by the router. The view must paint
  * it with DOM nodes (textContent / lib/dom.js helpers only — never innerHTML,
  * never inline styles) and may attach its own listeners. Views must not touch
- * the shell (sidebar, scan form, notice, footer), read location.hash directly,
- * or keep module-level mutable UI state: the router re-renders on every state
- * change and on Back/Forward.
+ * the shell (rail, top bar, scan form, notice, status bar), read
+ * location.hash directly, or keep module-level mutable UI state: the router
+ * re-renders on every state change and on Back/Forward.
  *
  * `ctx` is:
  *   {
@@ -26,7 +26,16 @@
  *     graph:    lib/graph.js namespace
  *     setState: (patch | (state) => patch) => void
  *     view:     (name, id?) => void             // router navigation / deep link
- *   }
+ *
+ *   Additive shell extensions (safe to ignore; existing keys are unchanged):
+ *     theme:        'light' | 'dark'            // active theme
+ *     toggleTheme:  () => void                  // flip + persist the theme
+ *     openPalette:  () => void                  // Ctrl/Cmd-K command palette
+ *     project: {
+ *       path:  string                           // scan path relative to the harness root
+ *       label: string                           // display label, e.g. "examples / demo"
+ *       open:  () => void                       // open the project switcher menu
+ *     }
  *
  * State shape (all keys always present):
  *   report          object | null   last /api/scan or /api/report payload
@@ -40,12 +49,17 @@
  *
  * Routes: #overview, #findings, #findings/<encoded-id>, #map, #dependencies,
  * #coverage, #history. The router maps unknown routes to #overview.
+ *
+ * Theme: light is the default; the choice persists in localStorage under
+ * `blastradius-theme`. The project switcher remembers folders under
+ * `blastradius-recents` and the selected scan path under `blastradius-project`.
  * ---------------------------------------------------------------------------
  */
 
 import { api } from './lib/api.js';
 import { createStore } from './lib/state.js';
 import { node as makeNode, emptyState } from './lib/dom.js';
+import { createCommandPalette } from './lib/palette.js';
 import * as format from './lib/format.js';
 import * as tree from './lib/tree.js';
 import * as graph from './lib/graph.js';
@@ -58,12 +72,60 @@ import * as coverageView from './views/coverage.js';
 import * as historyView from './views/history.js';
 
 const ROUTES = Object.freeze({
-  overview: { module: overviewView, title: 'Repository health', subtitle: 'Find what’s broken. Understand what depends on it.' },
-  findings: { module: findingsView, title: 'Findings', subtitle: 'Every diagnostic, with the dependency impact behind it.' },
-  map: { module: mapView, title: 'Component map', subtitle: 'Every file as a tree node, with its import links and blast radius.' },
-  dependencies: { module: dependenciesView, title: 'Dependency graph', subtitle: 'The JS/TS import graph and reverse blast radius, node by node.' },
-  coverage: { module: coverageView, title: 'Coverage', subtitle: 'An explicit account of what was and was not checked.' },
-  history: { module: historyView, title: 'Saved scans', subtitle: 'Compare how this workspace changes over time.' },
+  overview: {
+    module: overviewView,
+    num: '01',
+    name: 'Overview',
+    title: 'Repository health',
+    headline: 'What breaks',
+    thin: 'when this changes?',
+    subtitle: 'Find what’s broken. Understand what depends on it.',
+  },
+  findings: {
+    module: findingsView,
+    num: '02',
+    name: 'Findings',
+    title: 'Findings',
+    headline: 'Every issue,',
+    thin: 'pinned to a line.',
+    subtitle: 'Every diagnostic, with the dependency impact behind it.',
+  },
+  map: {
+    module: mapView,
+    num: '03',
+    name: 'Map',
+    title: 'Component map',
+    headline: 'Follow the blast',
+    thin: 'through the tree.',
+    subtitle: 'Every file as a tree node, with its import links and blast radius.',
+  },
+  dependencies: {
+    module: dependenciesView,
+    num: '04',
+    name: 'Dependencies',
+    title: 'Dependency graph',
+    headline: 'Imports are',
+    thin: 'liability edges.',
+    subtitle: 'The JS/TS import graph and reverse blast radius, node by node.',
+  },
+  coverage: {
+    module: coverageView,
+    num: '05',
+    name: 'Coverage',
+    title: 'Coverage',
+    headline: 'Say what was',
+    thin: 'not looked at.',
+    subtitle: 'An explicit account of what was and was not checked.',
+  },
+  history: {
+    module: historyView,
+    num: '06',
+    name: 'Saved scans',
+    title: 'Saved scans',
+    headline: 'Change, measured',
+    thin: 'between scans.',
+    subtitle: 'Compare how this workspace changes over time.',
+  },
 });
 const DEFAULT_ROUTE = 'overview';
 
@@ -83,16 +145,116 @@ const store = createStore({
 const root = $('view-root');
 let currentRoute = null;
 let rendering = false;
+let palette = null;
+
+const THEME_KEY = 'blastradius-theme';
+const PROJECT_KEY = 'blastradius-project';
+const RECENTS_KEY = 'blastradius-recents';
+const MAX_RECENTS = 6;
+
+/* --------------------------------------------------------------- utilities */
+
+function h(tag, className = '', text = null) {
+  const element = document.createElement(tag);
+  if (className) element.className = className;
+  if (text !== null && text !== undefined) element.textContent = String(text);
+  return element;
+}
+
+function setText(id, text) {
+  const element = typeof id === 'string' ? $(id) : id;
+  if (element) element.textContent = String(text ?? '');
+}
+
+function shortId(value, length = 6) {
+  return format.shortId(value, length).toUpperCase();
+}
+
+function scanStamp(scan) {
+  if (scan?.created_at) {
+    const date = new Date(scan.created_at);
+    if (!Number.isNaN(date.getTime())) {
+      return date.toLocaleDateString('en-GB', {
+        day: '2-digit',
+        month: 'short',
+        year: 'numeric',
+      }).toUpperCase();
+    }
+  }
+  return 'LATEST REPORT';
+}
+
+function readStorage(key, fallback = null) {
+  try {
+    const raw = localStorage.getItem(key);
+    return raw === null ? fallback : raw;
+  } catch {
+    return fallback;
+  }
+}
+
+function writeStorage(key, value) {
+  try {
+    localStorage.setItem(key, value);
+  } catch {
+    // Storage unavailable (private mode): the shell still works per session.
+  }
+}
 
 /* ------------------------------------------------------------------ notices */
 
-function notify(message = '') {
+function notify(message = '', kind = 'notice') {
   const notice = $('notice');
-  notice.textContent = message;
-  notice.hidden = !message;
+  if (!notice) return;
+  if (!message) {
+    notice.hidden = true;
+    notice.classList.remove('is-busy');
+    return;
+  }
+  setText('notice-title', kind === 'error' ? 'Error' : kind === 'busy' ? 'Working' : 'Notice');
+  setText('notice-body', message);
+  notice.hidden = false;
+  notice.classList.toggle('is-busy', kind === 'busy');
 }
 
-/* ------------------------------------------------------------------ routing */
+function wireNotice() {
+  const close = $('notice-close');
+  if (close) close.addEventListener('click', () => notify(''));
+}
+
+/* ------------------------------------------------------------------- theme */
+
+function currentTheme() {
+  return document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light';
+}
+
+function applyTheme(theme, persist = true) {
+  const next = theme === 'dark' ? 'dark' : 'light';
+  document.documentElement.dataset.theme = next;
+
+  const toggle = $('theme-toggle');
+  if (toggle) {
+    const toDark = next === 'light';
+    toggle.setAttribute('aria-pressed', next === 'dark' ? 'true' : 'false');
+    toggle.setAttribute('aria-label', toDark ? 'Switch to dark theme' : 'Switch to light theme');
+    setText('theme-label', toDark ? 'Dark' : 'Light');
+  }
+
+  if (persist) writeStorage(THEME_KEY, next);
+}
+
+function toggleTheme() {
+  applyTheme(currentTheme() === 'dark' ? 'light' : 'dark');
+}
+
+function wireThemeToggle() {
+  const toggle = $('theme-toggle');
+  if (toggle) toggle.addEventListener('click', toggleTheme);
+  const stored = readStorage(THEME_KEY);
+  applyTheme(stored === 'dark' ? 'dark' : 'light', false);
+}
+
+/* ----------------------------------------------------------------- routing */
 
 function parseHash() {
   const raw = location.hash.replace(/^#/, '');
@@ -143,8 +305,15 @@ function setActiveNav(name) {
 function setHeading(route) {
   const meta = ROUTES[route];
   const title = $('page-title');
-  title.replaceChildren(document.createTextNode(meta.title), makeNode('span', '.', 'accent'));
-  $('page-subtitle').textContent = meta.subtitle;
+  if (title) {
+    const thin = makeNode('span', meta.thin, 'thin');
+    const br = document.createElement('br');
+    title.replaceChildren(document.createTextNode(meta.headline), br, thin);
+  }
+  setText('page-subtitle', meta.subtitle);
+  setText('page-kicker-num', meta.num);
+  setText('page-kicker-label', meta.name);
+  setText('status-view', `View / ${meta.name}`);
   document.title = `${meta.title} · BlastRadius`;
 }
 
@@ -182,12 +351,21 @@ function render() {
       state,
       api,
       node: makeNode,
-      notify,
+      notify: message => notify(message),
       format,
       tree,
       graph,
       setState: patch => store.set(patch),
       view,
+      // Additive shell extensions (see CONTRACT.md).
+      theme: currentTheme(),
+      toggleTheme,
+      openPalette: () => palette?.open(),
+      project: {
+        path: projectPath,
+        label: projectLabel(),
+        open: () => openProjectMenu(true),
+      },
     };
 
     try {
@@ -233,46 +411,77 @@ function syncChrome(state) {
   const save = $('save-button');
 
   if (session) {
-    $('project-name').textContent = session.name;
-    $('root-path').textContent = session.root;
+    setText('root-path', session.root);
     save.hidden = !session.persistence;
   }
 
+  updateProjectLabel();
+
   if (!report) {
-    $('nav-count').textContent = '0';
-    $('report-id').textContent = '';
-    actions.hidden = true;
-    $('footer-status').textContent = 'Waiting for a scan';
+    setText('nav-count', '0');
+    const count = $('nav-count');
+    if (count) count.title = 'No findings';
+    setText('report-id', '');
+    if (actions) actions.hidden = true;
+    setText('footer-status', 'Waiting for a scan');
+    setText('rail-scan', 'No scan');
+    setText('rail-issues', '—');
+    setText('rail-checked', '—');
+    setText('page-meta-strong', 'No scan loaded');
+    setText('page-meta-note', 'Read-only analysis');
+    setText('status-summary', 'No report');
     return;
   }
 
   const scan = report.scan;
   const summary = report.summary;
-  $('nav-count').textContent = format.number(summary.issues);
-  $('nav-count').title = `${format.number(affectedFileCount(report))} affected files`;
-  $('report-id').textContent = `SCAN ${scan.id}`;
-  actions.hidden = false;
-  $('footer-status').textContent = `${String(scan.mode).toUpperCase()} · ${scan.partial ? 'PARTIAL COVERAGE' : 'SCAN COMPLETE'}`;
+  const stamp = `Scan ${shortId(scan.id)}`;
+
+  const count = $('nav-count');
+  if (count) {
+    count.textContent = format.number(summary.issues);
+    count.title = `${format.number(affectedFileCount(report))} affected files`;
+  }
+
+  setText('report-id', stamp);
+  if (actions) actions.hidden = false;
+  setText('footer-status', `${format.modeLabel(scan.mode).toUpperCase()} · ${scan.partial ? 'PARTIAL COVERAGE' : 'SCAN COMPLETE'}`);
+  setText('rail-scan', stamp);
+  setText('rail-issues', format.number(summary.issues));
+  setText('rail-checked', `${format.number(scan.files_checked)} / ${format.number(scan.files_discovered)}`);
+  setText('page-meta-strong', `${stamp} · ${scanStamp(scan)}`);
+  setText('page-meta-note', scan.partial ? 'Partial coverage' : 'Read-only analysis');
+  setText('status-summary', `${format.number(scan.files_discovered)} discovered · ${format.number(scan.files_checked)} checked · ${format.number(summary.issues)} issues`);
 }
 
-/* ------------------------------------------------------------ shared events */
+/* ------------------------------------------------------------ scan actions */
+
+function setScanBusy(busy) {
+  const button = $('scan-button');
+  if (!button) return;
+  button.disabled = busy;
+  button.classList.toggle('busy', busy);
+  button.textContent = busy ? 'Scanning…' : 'Run scan ↗';
+}
 
 function wireScanForm() {
-  $('scan-form').addEventListener('submit', async event => {
+  const form = $('scan-form');
+  if (!form) return;
+  form.addEventListener('submit', async event => {
     event.preventDefault();
-    const button = $('scan-button');
+    const path = ($('scan-path').value || '.').trim() || '.';
+    const mode = $('scan-mode').value;
+    setScanBusy(true);
+    setText('scan-state', 'Checking files and dependencies…');
+    notify(`Walking ${path} · resolving imports · checking references`, 'busy');
     const save = $('save-button');
-    button.disabled = true;
-    button.textContent = 'Scanning…';
-    button.classList.add('busy');
-    $('scan-state').textContent = 'Checking files and dependencies…';
-    save.disabled = true;
-    notify();
+    if (save) save.disabled = true;
+
     try {
-      const report = await api('/api/scan', {
-        path: $('scan-path').value || '.',
-        mode: $('scan-mode').value,
-      });
+      const report = await api('/api/scan', { path, mode });
+      projectPath = normalizePath(path);
+      writeStorage(PROJECT_KEY, projectPath);
+      updateProjectLabel();
       const first = report.issues?.[0] ? format.issueId(report.issues[0]) : null;
       store.set({
         report,
@@ -283,22 +492,276 @@ function wireScanForm() {
         dependencyQuery: '',
         history: null,
       });
-      $('scan-state').textContent = report.scan.partial ? 'Partial coverage' : 'Scan complete';
-      if (report.scan.partial || report.scan.graph_partial) {
-        notify('This report has incomplete coverage or graph information. Open Coverage for the details.');
-      }
+      setText('scan-state', report.scan.partial ? 'Partial coverage' : 'Scan complete');
+      notify(
+        `${format.number(report.summary.issues)} issues across ${format.number(report.scan.files_discovered)} discovered files`
+        + (report.scan.not_checked_count
+          ? ` · ${format.number(report.scan.not_checked_count)} unsupported file${report.scan.not_checked_count === 1 ? '' : 's'} skipped.`
+          : '.'),
+        'notice',
+      );
+      rememberRecent(path);
       view(DEFAULT_ROUTE);
     } catch (error) {
-      notify(error.message);
-      $('scan-state').textContent = 'Scan did not complete';
+      notify(error.message, 'error');
+      setText('scan-state', 'Scan did not complete');
     } finally {
-      button.disabled = false;
-      button.textContent = 'Run scan ↗';
-      button.classList.remove('busy');
-      save.disabled = false;
+      setScanBusy(false);
+      if (save) save.disabled = false;
     }
   });
 }
+
+/* ---------------------------------------------------------- project switcher */
+
+let projectPath = normalizePath(readStorage(PROJECT_KEY, '.'));
+const browse = { path: null, data: null, error: null, loading: false };
+let browseRequest = 0;
+
+function normalizePath(value) {
+  let next = String(value ?? '.').replace(/\\/g, '/').trim();
+  while (next.startsWith('./')) next = next.slice(2);
+  next = next.replace(/\/+$/, '');
+  return next === '' ? '.' : next;
+}
+
+function displayPath(path) {
+  const normalized = normalizePath(path);
+  if (normalized === '.') return store.get().session?.name || 'workspace';
+  return normalized.split('/').filter(Boolean).join(' / ');
+}
+
+function projectLabel() {
+  return displayPath(projectPath);
+}
+
+function updateProjectLabel() {
+  const label = projectLabel();
+  setText('project-label', label);
+  setText('project-name', label);
+  setText('page-meta-path', label);
+  const button = $('project-btn');
+  if (button) button.setAttribute('aria-label', `Current project: ${label}. Switch project.`);
+
+  const session = store.get().session;
+  setText('status-path', session?.root ? `${session.root} · Offline` : 'Local workspace · Offline');
+}
+
+function readRecents() {
+  try {
+    const parsed = JSON.parse(readStorage(RECENTS_KEY, '[]'));
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .map(item => (typeof item === 'string' ? { path: item, label: displayPath(item) } : item))
+      .filter(item => item && typeof item.path === 'string')
+      .map(item => ({ path: normalizePath(item.path), label: String(item.label ?? displayPath(item.path)) }))
+      .slice(0, MAX_RECENTS);
+  } catch {
+    return [];
+  }
+}
+
+function saveRecents(items) {
+  writeStorage(RECENTS_KEY, JSON.stringify(items.slice(0, MAX_RECENTS)));
+}
+
+function rememberRecent(path) {
+  const normalized = normalizePath(path);
+  const label = normalized === '.' ? (store.get().session?.name || 'workspace root') : displayPath(normalized);
+  const items = readRecents().filter(item => item.path !== normalized);
+  items.unshift({ path: normalized, label });
+  saveRecents(items);
+}
+
+function selectProject(path) {
+  projectPath = normalizePath(path);
+  writeStorage(PROJECT_KEY, projectPath);
+  const input = $('scan-path');
+  if (input) input.value = projectPath;
+  updateProjectLabel();
+  closeProjectMenu(false);
+  notify(`Project set to ${projectLabel()}. Run a scan to load it.`);
+}
+
+function menuSection(heading) {
+  const section = h('div', 'menu-section');
+  section.append(h('div', 'menu-heading', heading));
+  return section;
+}
+
+function menuButton(label, meta, onClick, current = false) {
+  const button = h('button', current ? 'menu-item is-current' : 'menu-item');
+  button.type = 'button';
+  button.setAttribute('role', 'menuitem');
+  if (current) button.setAttribute('aria-current', 'true');
+  button.append(h('span', 'menu-label', label), h('span', 'meta', meta));
+  button.addEventListener('click', onClick);
+  return button;
+}
+
+function renderProjectMenu() {
+  const menu = $('project-menu');
+  if (!menu) return;
+  menu.replaceChildren();
+
+  const currentSection = menuSection('Current project');
+  const current = h('div', 'menu-item is-static');
+  const currentLabel = h('span', 'menu-label');
+  currentLabel.append(h('span', 'mono', projectLabel()));
+  current.append(currentLabel, h('span', 'meta', 'Read-only'));
+  currentSection.append(current);
+  menu.append(currentSection);
+
+  const recentSection = menuSection('Recent folders');
+  const recents = readRecents();
+  if (!recents.length) {
+    recentSection.append(h('div', 'menu-empty', 'No recent folders yet. Run a scan to remember one.'));
+  } else {
+    recents.forEach(item => {
+      recentSection.append(menuButton(
+        item.label || displayPath(item.path),
+        item.path === projectPath ? 'Current' : 'Recent',
+        () => selectProject(item.path),
+        item.path === projectPath,
+      ));
+    });
+  }
+  menu.append(recentSection);
+
+  const folderSection = h('div', 'menu-section');
+  const head = h('div', 'menu-browse-head');
+  const title = h('div', 'menu-heading', 'Browse folders');
+  const pathLabel = h('span', 'path', browse.loading ? 'Loading…' : displayPath(browse.path ?? projectPath));
+  head.append(title, pathLabel);
+  folderSection.append(head);
+
+  if (browse.error) {
+    folderSection.append(h('div', 'menu-empty', `${browse.error} Recent folders still work.`));
+  } else if (browse.loading) {
+    folderSection.append(h('div', 'menu-empty', 'Reading folders…'));
+  } else if (browse.data) {
+    const nav = h('div', 'menu-browse-nav');
+    if (browse.data.parent) {
+      const up = h('button', 'btn btn--ghost', '↑ Up');
+      up.type = 'button';
+      up.addEventListener('click', () => loadDirectories(browse.data.parent));
+      nav.append(up);
+    }
+    const home = h('button', 'btn btn--ghost', '⌂ Root');
+    home.type = 'button';
+    home.addEventListener('click', () => loadDirectories('.'));
+    nav.append(home);
+    folderSection.append(nav);
+
+    if (!browse.data.directories.length) {
+      folderSection.append(h('div', 'menu-empty', 'No subfolders here.'));
+    } else {
+      browse.data.directories.forEach(entry => {
+        const button = h('button', 'menu-item');
+        button.type = 'button';
+        button.setAttribute('role', 'menuitem');
+        const label = h('span', 'menu-label');
+        label.append(h('span', 'dir-mark', '▸'), document.createTextNode(entry.name));
+        button.append(label, h('span', 'meta', 'Dir'));
+        button.addEventListener('click', () => loadDirectories(entry.path));
+        folderSection.append(button);
+      });
+    }
+
+    const use = h('button', 'btn btn--solid menu-use');
+    use.type = 'button';
+    use.append(h('span', '', `Use ${displayPath(browse.data.path)}`), h('span', '', '↵'));
+    use.addEventListener('click', () => selectProject(browse.data.path));
+    folderSection.append(use);
+  }
+  menu.append(folderSection);
+}
+
+async function loadDirectories(path) {
+  const request = ++browseRequest;
+  browse.path = normalizePath(path);
+  browse.data = null;
+  browse.error = null;
+  browse.loading = true;
+  renderProjectMenu();
+
+  try {
+    const data = await api(`/api/directories?path=${encodeURIComponent(browse.path)}`);
+    if (request !== browseRequest) return;
+    browse.data = {
+      path: normalizePath(data?.path ?? browse.path),
+      parent: data?.parent == null ? null : normalizePath(data.parent),
+      directories: Array.isArray(data?.directories) ? data.directories : [],
+    };
+    browse.error = null;
+  } catch (error) {
+    if (request !== browseRequest) return;
+    browse.data = null;
+    browse.error = error.status === 404
+      ? 'Folder browsing is not available on this harness.'
+      : error.message;
+  } finally {
+    if (request !== browseRequest) return;
+    browse.loading = false;
+    const menu = $('project-menu');
+    if (menu && !menu.hidden) renderProjectMenu();
+  }
+}
+
+function openProjectMenu(focusFirst = false) {
+  const menu = $('project-menu');
+  const button = $('project-btn');
+  if (!menu || !button) return;
+  browse.path = projectPath;
+  browse.data = null;
+  browse.error = null;
+  browse.loading = true;
+  renderProjectMenu();
+  menu.hidden = false;
+  button.setAttribute('aria-expanded', 'true');
+  if (focusFirst) {
+    const first = menu.querySelector('button');
+    if (first) first.focus();
+  }
+  loadDirectories(projectPath);
+}
+
+function closeProjectMenu(restoreFocus = false) {
+  const menu = $('project-menu');
+  const button = $('project-btn');
+  if (!menu || menu.hidden) return;
+  menu.hidden = true;
+  if (button) {
+    button.setAttribute('aria-expanded', 'false');
+    if (restoreFocus) button.focus();
+  }
+}
+
+function wireProjectSwitcher() {
+  const button = $('project-btn');
+  const menu = $('project-menu');
+  if (!button || !menu) return;
+
+  button.addEventListener('click', () => {
+    if (menu.hidden) openProjectMenu(false);
+    else closeProjectMenu(false);
+  });
+
+  button.addEventListener('keydown', event => {
+    if (event.key === 'ArrowDown' && menu.hidden) {
+      event.preventDefault();
+      openProjectMenu(true);
+    }
+  });
+
+  document.addEventListener('click', event => {
+    if (menu.hidden) return;
+    if (menu.contains(event.target) || button.contains(event.target)) return;
+    closeProjectMenu(false);
+  });
+}
+
+/* ------------------------------------------------------------ shared events */
 
 function wireNav() {
   document.querySelectorAll('[data-view]').forEach(button => {
@@ -307,34 +770,39 @@ function wireNav() {
 }
 
 function wireActions() {
-  $('export-button').addEventListener('click', () => {
-    const report = store.get().report;
-    if (!report) return;
-    const url = URL.createObjectURL(new Blob([`${JSON.stringify(report, null, 2)}\n`], { type: 'application/json' }));
-    const link = makeNode('a');
-    link.href = url;
-    link.download = `blastradius-${report.scan.id}.json`;
-    document.body.append(link);
-    link.click();
-    link.remove();
-    setTimeout(() => URL.revokeObjectURL(url), 1000);
-  });
+  const exportButton = $('export-button');
+  if (exportButton) {
+    exportButton.addEventListener('click', () => {
+      const report = store.get().report;
+      if (!report) return;
+      const url = URL.createObjectURL(new Blob([`${JSON.stringify(report, null, 2)}\n`], { type: 'application/json' }));
+      const link = makeNode('a');
+      link.href = url;
+      link.download = `blastradius-${report.scan.id}.json`;
+      document.body.append(link);
+      link.click();
+      link.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    });
+  }
 
-  $('save-button').addEventListener('click', async () => {
-    const report = store.get().report;
-    if (!report) return;
-    const button = $('save-button');
-    button.disabled = true;
-    try {
-      const saved = await api('/api/save', { report_id: report.scan.id });
-      notify(`Scan saved. ID: ${saved.id}`);
-      store.set({ history: null });
-    } catch (error) {
-      notify(error.message);
-    } finally {
-      button.disabled = false;
-    }
-  });
+  const saveButton = $('save-button');
+  if (saveButton) {
+    saveButton.addEventListener('click', async () => {
+      const report = store.get().report;
+      if (!report) return;
+      saveButton.disabled = true;
+      try {
+        const saved = await api('/api/save', { report_id: report.scan.id });
+        notify(`Scan saved. ID: ${saved.id}`);
+        store.set({ history: null });
+      } catch (error) {
+        notify(error.message, 'error');
+      } finally {
+        saveButton.disabled = false;
+      }
+    });
+  }
 }
 
 /* --------------------------------------------------------- keyboard shortcuts */
@@ -374,8 +842,22 @@ function moveFindingSelection(delta) {
 }
 
 function onGlobalKeyDown(event) {
-  if (event.defaultPrevented || event.ctrlKey || event.metaKey || event.altKey) return;
+  // The palette owns Escape and arrow keys while it is open.
+  if (palette?.isOpen()) return;
+  if (event.defaultPrevented) return;
+
   const target = event.target;
+
+  if (event.key === 'Escape') {
+    const menu = $('project-menu');
+    if (menu && !menu.hidden) {
+      event.preventDefault();
+      closeProjectMenu(true);
+      return;
+    }
+  }
+
+  if (event.ctrlKey || event.metaKey || event.altKey) return;
 
   // Escape is a command key, not a typing key: it clears the findings search
   // and the selection even while the search field itself has focus.
@@ -415,54 +897,21 @@ function onGlobalKeyDown(event) {
       event.preventDefault();
       moveFindingSelection(-1);
       break;
-    case 'Enter':
+    case 'Enter': {
       // Focused rows/buttons activate natively; otherwise open the selected finding.
       if (isInteractiveTarget(target)) return;
       event.preventDefault();
       const { selectedId } = store.get();
       if (selectedId) view('findings', selectedId);
       break;
+    }
+    default:
+      break;
   }
 }
 
 function wireKeyboard() {
   window.addEventListener('keydown', onGlobalKeyDown);
-}
-
-/* ------------------------------------------------------------- theme toggle */
-
-const THEME_KEY = 'blastradius-theme';
-
-function applyTheme(theme) {
-  const next = theme === 'light' ? 'light' : 'dark';
-  document.documentElement.dataset.theme = next;
-  const toggle = $('theme-toggle');
-  if (toggle) {
-    toggle.textContent = next === 'light' ? '☀' : '☾';
-    toggle.setAttribute('aria-label', next === 'light' ? 'Switch to dark theme' : 'Switch to light theme');
-    toggle.setAttribute('aria-pressed', next === 'light' ? 'true' : 'false');
-  }
-  try {
-    localStorage.setItem(THEME_KEY, next);
-  } catch {
-    // Storage unavailable (private mode): the toggle still works for the session.
-  }
-}
-
-function wireThemeToggle() {
-  const toggle = $('theme-toggle');
-  if (toggle) {
-    toggle.addEventListener('click', () => {
-      applyTheme(document.documentElement.dataset.theme === 'light' ? 'dark' : 'light');
-    });
-  }
-  let stored = null;
-  try {
-    stored = localStorage.getItem(THEME_KEY);
-  } catch {
-    stored = null;
-  }
-  applyTheme(stored === 'light' ? 'light' : 'dark');
 }
 
 /* ---------------------------------------------------------------- skip link */
@@ -481,15 +930,70 @@ function wireSkipLink() {
   });
 }
 
+/* ----------------------------------------------------------- command palette */
+
+function paletteCommands() {
+  const commands = Object.entries(ROUTES).map(([id, meta]) => ({
+    label: `Go to ${meta.name}`,
+    meta: `${meta.num} / ${meta.name.toUpperCase()}`,
+    keywords: id,
+    run: () => view(id),
+  }));
+
+  commands.push({
+    label: 'Toggle theme',
+    meta: currentTheme() === 'dark' ? 'To light' : 'To dark',
+    run: () => applyTheme(currentTheme() === 'dark' ? 'light' : 'dark'),
+  });
+
+  commands.push({
+    label: 'Switch project',
+    meta: projectLabel(),
+    run: () => openProjectMenu(true),
+  });
+
+  commands.push({
+    label: 'Run scan',
+    meta: projectPath === '.' ? 'Workspace root' : displayPath(projectPath),
+    run: () => $('scan-form')?.requestSubmit(),
+  });
+
+  if (store.get().report) {
+    commands.push({
+      label: 'Clear findings filters',
+      meta: 'Reset search',
+      run: () => {
+        store.set({ filters: { query: '', severity: 'all', page: 0 } });
+        view('findings');
+      },
+    });
+  }
+
+  return commands;
+}
+
+function wirePalette() {
+  palette = createCommandPalette({
+    getCommands: paletteCommands,
+    onOpen: () => closeProjectMenu(false),
+  });
+}
+
 /* ---------------------------------------------------------------- bootstrap */
 
 async function bootstrap() {
+  wireThemeToggle();
+  wireNotice();
   wireNav();
   wireScanForm();
   wireActions();
+  wireProjectSwitcher();
+  wirePalette();
   wireKeyboard();
-  wireThemeToggle();
   wireSkipLink();
+  updateProjectLabel();
+  const initialPath = $('scan-path');
+  if (initialPath) initialPath.value = projectPath;
 
   window.addEventListener('hashchange', render);
   store.subscribe(() => {
@@ -499,9 +1003,14 @@ async function bootstrap() {
   try {
     const session = await api('/api/session');
     store.set({ session });
+    updateProjectLabel();
+    if (!$('project-menu')?.hidden) renderProjectMenu();
   } catch (error) {
-    notify(error.message);
-    $('scan-button').disabled = true;
+    notify(error.message, 'error');
+    const scanButton = $('scan-button');
+    if (scanButton) scanButton.disabled = true;
+    setText('project-label', 'workspace');
+    setText('project-name', 'workspace');
   }
 
   // Restore the most recent in-memory report so reloads and deep links keep
@@ -511,10 +1020,10 @@ async function bootstrap() {
     if (report) {
       const selected = report.issues?.[0] ? format.issueId(report.issues[0]) : null;
       store.set({ report, selectedId: selected });
-      $('scan-state').textContent = report.scan.partial ? 'Partial coverage' : 'Scan complete';
+      setText('scan-state', report.scan.partial ? 'Partial coverage' : 'Scan complete');
     }
   } catch (error) {
-    if (error.status !== 404) notify(error.message);
+    if (error.status !== 404) notify(error.message, 'error');
   }
 
   if (!location.hash) {

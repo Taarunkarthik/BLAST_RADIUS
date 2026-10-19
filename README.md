@@ -12,7 +12,7 @@ pass, honestly reports what it did *not* check, and never suggests or applies a 
 
 Read-only. Offline after setup. Deterministic. No code execution, no network calls during a scan.
 
-![BlastRadius harness Overview dashboard after a full scan of the demo project](docs/assets/harness.png)
+![BlastRadius harness in Swiss style — the Overview dashboard with its project switcher, command palette and severity donut after a full scan of the demo project](docs/assets/harness.png)
 
 ## The problem
 
@@ -52,10 +52,12 @@ JS/TS graph.
 - **Checks every file type it knows:** JS/TS, CSS/SCSS, JSON, YAML, HTML, and Markdown.
 - **Builds a real dependency graph** for JS/TS and computes the reverse-dependency *blast radius* —
   affected files, direct vs. transitive, and one shortest path each.
-- **Shows it all in a browser:** the optional local harness renders an Overview dashboard with a
-  severity donut and top-blast-radius ranking, a searchable findings list with collapsible
-  tree-impact detail, a filesystem **Map** of the component tree, and an interactive SVG
-  dependency graph — still local and read-only.
+- **Shows it all in a browser:** the optional local harness is a Swiss-style, read-only UI with a
+  project switcher, a Ctrl/Cmd-K command palette, and a light/dark toggle. It renders an
+  impact-first Overview (severity donut and top-blast-radius leaderboard), a searchable findings
+  list with a terminal-style impact diagram, a **DSA-style node-link component Map** (top-down,
+  left-right, or radial, with folder collapse and click-to-blast-radius), and an interactive SVG
+  dependency graph.
 - **Uses the real resolver:** nearest `tsconfig`/`jsconfig`, path mappings, package exports, and the
   nearest `package.json` — so aliases and workspaces resolve like your bundler does.
 - **Tells the truth about coverage:** unsupported files, size/limit skips, unresolved imports, and

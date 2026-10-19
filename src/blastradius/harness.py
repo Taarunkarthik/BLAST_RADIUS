@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Literal
 from urllib.parse import urlsplit
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -182,6 +182,32 @@ def create_app(root: Path, *, token: str | None = None) -> FastAPI:
             return candidate
         except (OSError, ValueError) as error:
             raise HTTPException(400, "Choose an existing directory inside the harness root.") from error
+
+    def relative_path(value):
+        """Render a resolved path as a POSIX path relative to the harness root."""
+        return value.relative_to(root).as_posix()
+
+    @app.get("/api/directories")
+    def directories(path: str = Query(default=".", max_length=1024)):
+        current = scoped_path(path)
+        children = []
+        try:
+            for entry in sorted(current.iterdir(), key=lambda item: item.name):
+                try:
+                    # Resolve before listing so symlinks (and Windows junctions)
+                    # that point outside the root are never advertised.
+                    if not entry.is_dir() or not entry.resolve(strict=True).is_relative_to(root):
+                        continue
+                    children.append({"name": entry.name, "path": relative_path(entry)})
+                except OSError:
+                    continue
+        except OSError as error:
+            raise HTTPException(422, f"Directory could not be listed: {error}") from error
+        return {
+            "path": relative_path(current),
+            "parent": None if current == root else relative_path(current.parent),
+            "directories": children,
+        }
 
     @app.post("/api/scan")
     def scan(body: ScanRequest):

@@ -1,154 +1,280 @@
 /**
- * Overview — dashboard for the current report.
+ * Overview — Swiss impact-first dashboard.
  *
  * Contract: export function render(container, ctx)
  * ctx = { state, api, node, notify, format, tree, graph, setState, view }
  *
- * The dashboard is a roll-up, not another findings list: a metrics row, a
- * partial-scan banner, an inline SVG severity donut, the top blast radius
- * ranked by affected files, plus coverage and dependency-graph summaries.
+ * Ported from preview.html (the design source of truth). The dashboard is a
+ * roll-up of the current report, not another findings list:
+ *
+ *   1. Metric strip on the 12-column grid (files checked, issues, high
+ *      severity, affected files).
+ *   2. Severity donut — inline SVG from report.summary.{high,medium,low}.
+ *      Geometry lives in attributes; every colour comes from a CSS class.
+ *   3. "Top blast radius" leaderboard — issues with impact.has_tree_impact,
+ *      ranked by affected_count (tie-break: file). Rows deep-link to the
+ *      finding via ctx.view('findings', format.issueId(issue)).
+ *   4. Coverage bar — checked vs unsupported, from report.scan.
+ *   5. Partial-scan banner when scan.partial || scan.graph_partial.
+ *
+ * Strictly black / white / grey except on severity elements (donut segments,
+ * swatches, the severity stack). border-radius is 0, no shadows, monospace for
+ * paths and numbers, and only tokens from styles.css are used.
  */
 
 import { el, svg } from '../lib/dom.js';
-import { issueId, number, percent, severityLabel } from '../lib/format.js';
-import { buildTree } from '../lib/tree.js';
-import { buildGraph, graphSummary, mostDependedOn, nodeLabel } from '../lib/graph.js';
+import { issueId, number, percent, severityLabel, shortId, truncate } from '../lib/format.js';
 
-const DONUT_RADIUS = 46;
-const DONUT_CIRCUMFERENCE = 2 * Math.PI * DONUT_RADIUS;
-const DONUT_MID = 60;
+const DONUT_SIZE = 200;
+const DONUT_RADIUS = 76;
+const DONUT_GAP = 1.2;
+const MAX_LEADER_ROWS = 5;
+const MAX_BLAST_CELLS = 16;
 
+function pad2(value) {
+  return String(value ?? 0).padStart(2, '0');
+}
+
+/** Width bucket class (w-0 … w-100 in 5% steps) for class-only bar widths. */
+function widthBucket(share) {
+  const clamped = Math.min(100, Math.max(0, Math.round(share)));
+  return `w-${Math.min(100, Math.round(clamped / 5) * 5)}`;
+}
+
+/** Unique dependent files across every tree-impact issue. */
 function affectedFiles(report) {
   const affected = new Set();
   for (const issue of report.issues ?? []) {
-    if (!issue.impact?.has_tree_impact) continue;
+    if (!issue?.impact?.has_tree_impact) continue;
     for (const file of issue.impact.direct_dependents ?? []) affected.add(file);
     for (const file of issue.impact.transitive_dependents ?? []) affected.add(file);
   }
   return affected;
 }
 
-function barClass(value, max) {
-  if (!max) return 'w-0';
-  const bucket = Math.min(100, Math.max(0, Math.round((value / max) * 20) * 5));
-  return `w-${bucket}`;
+/** Tree-impact issues ranked by affected_count desc, tie-break file asc. */
+function rankByBlast(issues) {
+  return (issues ?? [])
+    .filter(issue => issue?.impact?.has_tree_impact)
+    .sort((left, right) =>
+      (right.impact?.affected_count ?? 0) - (left.impact?.affected_count ?? 0)
+      || String(left.file ?? '').localeCompare(String(right.file ?? '')))
+    .slice(0, MAX_LEADER_ROWS);
 }
 
-function metric(label, value, detail, valueClass = '') {
+function summaryTotals(summary) {
+  return (summary?.high ?? 0) + (summary?.medium ?? 0) + (summary?.low ?? 0);
+}
+
+/* ------------------------------------------------------------------ pieces */
+
+/**
+ * Metric card on the 12-column grid. `valueParts` is either a plain string or
+ * an array of parts (`{ text, denom }` renders the smaller `/10` suffix).
+ * `extra` (the severity stack) slots between the value and the note.
+ */
+function metricCard(label, valueParts, note, flag, extra = null) {
   const card = el('article', { className: 'metric' });
-  card.append(
-    el('span', { text: label }),
-    el('strong', { text: value, className: valueClass }),
-    el('small', { text: detail }),
+  const head = el('div', { className: 'metric-head' });
+  head.append(
+    el('span', { className: 'metric-label', text: label }),
+    el('span', { className: 'metric-flag', text: flag || '' }),
   );
+  const value = el('div', { className: 'metric-value' });
+  if (Array.isArray(valueParts)) {
+    for (const part of valueParts) {
+      if (!part) continue;
+      value.append(el('span', part.denom ? { className: 'denom', text: part.text } : { text: part.text }));
+    }
+  } else {
+    value.append(el('span', { text: valueParts }));
+  }
+  card.append(head, value);
+  if (extra) card.append(extra);
+  card.append(el('div', { className: 'metric-note', text: note }));
   return card;
 }
 
-function panel(title, subtitle, ...children) {
-  const section = el('article', { className: 'panel' });
-  const heading = el('div', { className: 'panel-heading' });
-  const copy = el('div');
-  copy.append(el('h2', { text: title }), el('p', { text: subtitle }));
-  heading.append(copy);
-  section.append(heading, ...children);
-  return section;
+/** Severity split for the issues metric — width buckets, no inline styles. */
+function severityStack(summary) {
+  const stack = el('div', { className: 'stack', attrs: { 'aria-hidden': 'true' } });
+  const total = summaryTotals(summary);
+  const shares = ['high', 'medium', 'low'].map(level => ({
+    level,
+    share: total ? ((summary?.[level] ?? 0) / total) * 100 : 0,
+  }));
+  // Round high/medium to 5% buckets and give low the remainder so the three
+  // spans always fill the track exactly. With no issues every bucket is 0.
+  let used = 0;
+  shares.forEach((segment, index) => {
+    const bucket = !total ? 0 : index === shares.length - 1
+      ? Math.max(0, 100 - used)
+      : Math.min(100 - used, Math.round(segment.share / 5) * 5);
+    used += bucket;
+    stack.append(el('span', { className: `${segment.level} ${widthBucket(bucket)}` }));
+  });
+  return stack;
+}
+
+function panelHead(title, sub, meta) {
+  const head = el('div', { className: 'panel-head' });
+  const wrap = el('div');
+  wrap.append(
+    el('h2', { text: title }),
+    el('div', { className: 'panel-sub', text: sub }),
+  );
+  head.append(wrap, el('span', { className: 'micro', text: meta }));
+  return head;
 }
 
 /**
- * Inline SVG donut of report.summary.{high,medium,low}. Position, dash
- * pattern and rotation are geometry attributes; every color comes from a CSS
- * class so the CSP never sees an inline style.
+ * Inline SVG donut of report.summary.{high,medium,low}. Position, dash pattern
+ * and rotation are geometry attributes; every colour comes from a CSS class so
+ * the CSP never sees an inline style.
  */
 function severityDonut(summary) {
-  const total = (summary.high ?? 0) + (summary.medium ?? 0) + (summary.low ?? 0);
-  const wrap = el('div', { className: 'overview-donut' });
+  const total = summaryTotals(summary);
   const canvas = svg('svg', {
-    class: 'overview-donut-canvas',
-    viewBox: `0 0 ${DONUT_MID * 2} ${DONUT_MID * 2}`,
+    class: 'donut-svg',
+    viewBox: `0 0 ${DONUT_SIZE} ${DONUT_SIZE}`,
     role: 'img',
-    'aria-label': `Severity breakdown: ${number(summary.high)} high, ${number(summary.medium)} medium and ${number(summary.low)} low findings`,
+    'aria-label': `Severity distribution: ${number(summary?.high ?? 0)} high, ${number(summary?.medium ?? 0)} medium and ${number(summary?.low ?? 0)} low.`,
   });
-  canvas.append(svg('title', {}, 'Severity breakdown'));
 
   if (!total) {
     canvas.append(svg('circle', {
       class: 'donut-seg donut-empty',
-      cx: DONUT_MID,
-      cy: DONUT_MID,
+      cx: DONUT_SIZE / 2,
+      cy: DONUT_SIZE / 2,
       r: DONUT_RADIUS,
-      'stroke-dasharray': `${DONUT_CIRCUMFERENCE} ${DONUT_CIRCUMFERENCE}`,
-      transform: `rotate(-90 ${DONUT_MID} ${DONUT_MID})`,
+      'stroke-dasharray': '100 0',
+      pathLength: 100,
+      transform: `rotate(-90 ${DONUT_SIZE / 2} ${DONUT_SIZE / 2})`,
     }));
   } else {
     const segments = [
-      { level: 'high', value: summary.high },
-      { level: 'medium', value: summary.medium },
-      { level: 'low', value: summary.low },
+      { level: 'high', value: summary?.high ?? 0 },
+      { level: 'medium', value: summary?.medium ?? 0 },
+      { level: 'low', value: summary?.low ?? 0 },
     ].filter(segment => segment.value > 0);
-    const gap = segments.length > 1 ? 2 : 0;
-    let seen = 0;
+    const gap = segments.length > 1 ? DONUT_GAP : 0;
+    let offset = 0;
     for (const segment of segments) {
-      const length = (segment.value / total) * DONUT_CIRCUMFERENCE;
+      const portion = (segment.value / total) * 100;
+      const length = Math.max(portion - gap, 0.5);
       canvas.append(svg('circle', {
-        class: `donut-seg donut-${segment.level}`,
-        cx: DONUT_MID,
-        cy: DONUT_MID,
+        class: `donut-seg donut-stroke-${segment.level}`,
+        cx: DONUT_SIZE / 2,
+        cy: DONUT_SIZE / 2,
         r: DONUT_RADIUS,
-        'stroke-dasharray': `${Math.max(0, length - gap)} ${DONUT_CIRCUMFERENCE}`,
-        'stroke-dashoffset': `${-(seen / total) * DONUT_CIRCUMFERENCE}`,
-        transform: `rotate(-90 ${DONUT_MID} ${DONUT_MID})`,
+        'stroke-dasharray': `${length} ${100 - length}`,
+        'stroke-dashoffset': -offset,
+        pathLength: 100,
+        transform: `rotate(-90 ${DONUT_SIZE / 2} ${DONUT_SIZE / 2})`,
       }));
-      seen += segment.value;
+      offset += portion;
     }
   }
 
-  canvas.append(svg('text', {
-    class: 'donut-center',
-    x: DONUT_MID,
-    y: DONUT_MID + 6,
-    'text-anchor': 'middle',
-  }, number(total)));
-  wrap.append(canvas);
+  canvas.append(
+    svg('text', {
+      class: 'donut-center-value',
+      x: DONUT_SIZE / 2,
+      y: DONUT_SIZE / 2 + 3,
+      'text-anchor': 'middle',
+    }, pad2(total)),
+    svg('text', {
+      class: 'donut-center-label',
+      x: DONUT_SIZE / 2,
+      y: DONUT_SIZE / 2 + 24,
+      'text-anchor': 'middle',
+    }, 'ISSUES'),
+  );
 
-  const legend = el('ul', { className: 'donut-legend' });
+  const legend = el('div', { className: 'donut-legend' });
   for (const level of ['high', 'medium', 'low']) {
-    const share = total ? (summary[level] / total) * 100 : 0;
-    const item = el('li');
-    item.append(
-      el('span', { className: `donut-dot ${level}` }),
-      el('span', { text: `${severityLabel(level)} · ${number(summary[level])}` }),
-      el('span', { className: 'donut-share', text: percent(share) }),
+    const share = total ? ((summary?.[level] ?? 0) / total) * 100 : 0;
+    const row = el('div', { className: 'donut-row' });
+    row.append(
+      el('span', { className: `sev-swatch sev-${level}`, attrs: { 'aria-hidden': 'true' } }),
+      el('span', { text: severityLabel(level) }),
+      el('span', { className: 'count', text: pad2(summary?.[level] ?? 0) }),
+      el('span', { className: 'pct', text: percent(share, 0) }),
     );
-    legend.append(item);
+    legend.append(row);
   }
-  wrap.append(legend);
-  return wrap;
+
+  const layout = el('div', { className: 'donut-layout' });
+  layout.append(canvas, legend);
+  return layout;
+}
+
+/** Leaderboard row: rank, file:line + type, blast scale, affected/eligible %. */
+function leaderRow(issue, index, ctx) {
+  const impact = issue.impact ?? {};
+  const affected = impact.affected_count ?? 0;
+  const eligible = impact.eligible_count ?? 0;
+  const pct = impact.impact_percentage ?? 0;
+  const row = el('button', {
+    className: 'leader-row',
+    type: 'button',
+    on: { click: () => ctx.view('findings', issueId(issue)) },
+    attrs: {
+      'aria-label': `Open ${issue.file ?? ''}:${issue.line ?? 0} (${issue.type ?? 'issue'}) in findings. ${number(affected)} of ${number(eligible)} eligible files, ${pct}%.`,
+    },
+  });
+
+  const main = el('span', { className: 'leader-main' });
+  const path = el('span', { className: 'leader-path' });
+  path.append(
+    el('span', {
+      className: `sev-swatch ${issue.severity ? `sev-${issue.severity}` : ''}`,
+      attrs: { 'aria-hidden': 'true' },
+    }),
+    el('span', { text: `${issue.file ?? ''}:${issue.line ?? 0}` }),
+  );
+  main.append(path, el('span', { className: 'leader-note', text: issue.type ?? '' }));
+
+  const scale = el('span', { className: 'blast-scale', attrs: { 'aria-hidden': 'true' } });
+  const cells = Math.min(Math.max(eligible, 0), MAX_BLAST_CELLS);
+  const filled = eligible > 0 ? Math.round((affected / eligible) * cells) : 0;
+  for (let cell = 0; cell < cells; cell += 1) {
+    scale.append(el('span', { className: cell < filled ? 'on' : '' }));
+  }
+
+  row.append(
+    el('span', { className: 'leader-rank', text: pad2(index + 1), attrs: { 'aria-hidden': 'true' } }),
+    main,
+    scale,
+    el('span', { className: 'leader-pct', text: `${number(affected)} / ${number(eligible)} · ${pct}%` }),
+  );
+  return row;
 }
 
 /** Banner shown when the scan could not cover every file or build the full graph. */
 function partialScanBanner(ctx, scan) {
   const gaps = [];
-  if (scan.partial) gaps.push('file coverage is incomplete');
-  if (scan.graph_partial) gaps.push('the dependency graph is incomplete');
+  if (scan?.partial) gaps.push('file coverage is incomplete');
+  if (scan?.graph_partial) gaps.push('the dependency graph is incomplete');
   if (!gaps.length) return null;
-  const banner = el('div', { className: 'overview-banner', attrs: { role: 'status' } });
-  banner.append(
-    el('span', { className: 'overview-banner-mark', text: '⚠', attrs: { 'aria-hidden': 'true' } }),
+  return el('div', { className: 'overview-banner', attrs: { role: 'status' } },
+    el('span', { className: 'overview-banner-mark', attrs: { 'aria-hidden': 'true' } }),
     el('div', { className: 'overview-banner-copy' },
       el('strong', { text: 'Partial scan — impact numbers may be understated' }),
-      el('p', {
+      el('span', {
         text: `This report has ${gaps.join(' and ')}, so blast-radius counts can understate the real reach of a failure. Open Coverage for the full account.`,
       }),
     ),
     el('button', {
-      className: 'secondary',
+      className: 'btn btn--ghost',
       type: 'button',
       text: 'Review coverage →',
       on: { click: () => ctx.view('coverage') },
     }),
   );
-  return banner;
 }
+
+/* ------------------------------------------------------------------- render */
 
 export function render(container, ctx) {
   const { state, format } = ctx;
@@ -156,173 +282,171 @@ export function render(container, ctx) {
   container.replaceChildren();
 
   if (!report) {
-    const welcome = el('section', { className: 'panel overview-welcome' });
-    welcome.append(
-      el('div', { className: 'overview-welcome-mark', text: '◎', attrs: { 'aria-hidden': 'true' } }),
-      el('h2', { text: 'Start with a scan' }),
+    const empty = el('div', { className: 'empty-state' });
+    empty.append(
+      el('span', { text: '◎', attrs: { 'aria-hidden': 'true' } }),
+      el('h3', { text: 'Start with a scan' }),
       el('p', {
-        text: 'Choose a directory inside this workspace and run a scan. BlastRadius maps syntax and dependency problems to the files that depend on them — without changing a single file.',
+        text: 'Choose a directory in the top bar and run a scan. BlastRadius maps syntax and dependency problems to the files that depend on them — without changing a single file.',
       }),
     );
-    const steps = el('ol', { className: 'overview-steps' });
-    for (const [title, body] of [
-      ['Scan', 'Pick a directory and a scan mode above.'],
-      ['Inspect', 'Open Findings to follow a diagnostic through the dependency tree.'],
-      ['Explore', 'Use Map and Dependencies to see the graph behind the impact.'],
-    ]) {
-      const item = el('li');
-      item.append(el('strong', { text: title }), el('span', { text: body }));
-      steps.append(item);
-    }
-    welcome.append(steps);
-    container.append(welcome);
+    container.append(empty);
     return;
   }
 
-  const scan = report.scan;
-  const summary = report.summary;
+  const scan = report.scan ?? {};
+  const summary = report.summary ?? {};
+  const issues = report.issues ?? [];
   const affected = affectedFiles(report);
-  const graph = report.graph ? buildGraph(report.graph) : null;
-  const graphStats = graphSummary(report.graph);
-  const tree = buildTree(scan, report.issues);
+  const ranked = rankByBlast(issues);
+  const top = ranked[0] ?? null;
 
   const banner = partialScanBanner(ctx, scan);
   if (banner) container.append(banner);
 
-  const metrics = el('section', { className: 'metrics', attrs: { 'aria-label': 'Scan summary' } });
+  /* 1 — metric strip on the 12-column grid */
+  const checked = scan.files_checked ?? 0;
+  const discovered = scan.files_discovered ?? 0;
+  const checkedShare = discovered ? (checked / discovered) * 100 : 0;
+  const metrics = el('section', { className: 'metric-grid metrics', attrs: { 'aria-label': 'Scan summary' } });
   metrics.append(
-    metric('Files checked', number(scan.files_checked), `${number(scan.files_discovered)} discovered · ${number(scan.not_checked_count)} unsupported`),
-    metric('Issues found', number(summary.issues), `${number(summary.medium)} medium · ${number(summary.low)} low`),
-    metric('High severity', number(summary.high), 'Broken syntax or dependencies', 'high-text'),
-    metric('Affected files', scan.mode === 'health' ? '—' : number(affected.size), 'Unique dependent JS/TS files'),
+    metricCard(
+      'Files checked',
+      [{ text: number(checked) }, { text: `/${number(discovered)}`, denom: true }],
+      `${percent(checkedShare)} of discovered files`,
+      'COVERAGE',
+    ),
+    metricCard(
+      'Issues found',
+      number(summary.issues ?? 0),
+      `${number(summary.medium ?? 0)} medium · ${number(summary.low ?? 0)} low · ${number(summary.high ?? 0)} high`,
+      scan.id ? `SCAN ${shortId(scan.id, 6).toUpperCase()}` : 'SCAN',
+      severityStack(summary),
+    ),
+    metricCard(
+      'High severity',
+      number(summary.high ?? 0),
+      'Broken syntax or dependencies',
+      '',
+    ),
+    metricCard(
+      'Affected files',
+      number(affected.size),
+      top
+        ? `${truncate(top.file ?? '', 28)} · ${top.impact?.impact_percentage ?? 0}% eligible`
+        : 'No finding affects another checked file',
+      'AFFECTED',
+    ),
   );
   container.append(metrics);
 
-  const grid = el('div', { className: 'overview-grid' });
+  const grid = el('div', { className: 'grid12' });
 
-  const severity = panel('Severity breakdown', 'Where the report needs attention');
-  const severityBody = el('div', { className: 'overview-body' });
-  severityBody.append(severityDonut(summary), el('p', {
-    text: summary.issues
-      ? `${percent((summary.high / (summary.issues || 1)) * 100)} of findings are high severity.`
-      : 'No findings were reported for this scan.',
-    className: 'note',
-  }));
-  severity.append(severityBody);
-  grid.append(severity);
-
-  const top = panel('Top blast radius', 'Failures ranked by the files they can break');
-  const topBody = el('div', { className: 'overview-body overview-impact-list' });
-  const impacted = (report.issues ?? [])
-    .filter(issue => issue.impact?.has_tree_impact)
-    .sort((left, right) =>
-      (right.impact.affected_count ?? 0) - (left.impact.affected_count ?? 0)
-      || String(left.file ?? '').localeCompare(String(right.file ?? ''))
-      || (left.line ?? 0) - (right.line ?? 0))
-    .slice(0, 5);
-  if (!impacted.length) {
-    topBody.append(el('p', {
-      text: scan.mode === 'health' ? 'Tree impact is disabled in health mode.' : 'No finding affects another checked file.',
-      className: 'note',
-    }));
-  } else {
-    impacted.forEach((issue, index) => {
-      const impact = issue.impact ?? {};
-      const button = el('button', {
-        className: 'overview-impact',
-        type: 'button',
-        on: { click: () => ctx.view('findings', issueId(issue)) },
-      });
-      const row = el('span', { className: 'overview-impact-row' });
-      row.append(
-        el('span', { className: 'overview-impact-rank', text: String(index + 1), attrs: { 'aria-hidden': 'true' } }),
-        el('span', { text: `${issue.file}:${issue.line}`, className: 'overview-finding-file' }),
-        el('span', { text: issue.type, className: 'overview-impact-type' }),
-      );
-      button.append(row, el('span', {
-        text: `${number(impact.affected_count)} / ${number(impact.eligible_count)} eligible · ${impact.impact_percentage}%`,
-        className: 'overview-impact-metric',
-      }));
-      topBody.append(button);
-    });
-  }
-  top.append(topBody);
-  grid.append(top);
-
-  const coverageCounts = tree.counts;
-  const coverage = panel('Coverage', 'Explicit about what was checked');
-  const coverageBody = el('div', { className: 'overview-body' });
-  const ratio = coverageCounts.files ? coverageCounts.checked / coverageCounts.files : 0;
-  coverageBody.append(
-    el('div', { className: 'overview-big', text: percent(ratio * 100) }),
-    el('p', { text: `${number(coverageCounts.checked)} of ${number(coverageCounts.files)} known files checked`, className: 'note' }),
+  /* 2 — severity donut */
+  const severityPanel = el('section', { className: 'col-4 panel panel--key' });
+  severityPanel.append(
+    panelHead('Severity distribution', 'Where the report needs attention.', `${pad2(summaryTotals(summary))} TOTAL`),
+    severityDonut(summary),
   );
-  const coverageBar = el('div', { className: 'overview-bar' });
-  coverageBar.append(el('span', { className: `overview-bar-fill checked ${barClass(coverageCounts.checked, coverageCounts.files || 1)}` }));
-  coverageBody.append(coverageBar);
-  const coverageFacts = el('div', { className: 'overview-facts' });
-  for (const [label, value] of [
-    ['Unsupported', coverageCounts.unchecked],
-    ['Excluded', coverageCounts.excluded],
-    ['Skipped', coverageCounts.skipped],
-  ]) {
-    const fact = el('div');
-    fact.append(el('strong', { text: number(value) }), el('span', { text: label }));
-    coverageFacts.append(fact);
-  }
-  coverageBody.append(coverageFacts);
-  const coverageLink = el('button', {
-    className: 'secondary',
-    type: 'button',
-    text: 'Open coverage →',
-    on: { click: () => ctx.view('coverage') },
-  });
-  coverageBody.append(coverageLink);
-  coverage.append(coverageBody);
-  grid.append(coverage);
+  grid.append(severityPanel);
 
-  const graphPanel = panel('Dependency graph', 'The JS/TS import graph behind tree impact');
-  const graphBody = el('div', { className: 'overview-body' });
-  if (!graph) {
-    graphBody.append(el('p', { text: 'No dependency graph was built for this scan.', className: 'note' }));
-  } else {
-    const stats = el('div', { className: 'overview-facts' });
-    for (const [label, value] of [
-      ['Files', graphStats.files],
-      ['Edges', graphStats.edges],
-      ['Packages', graphStats.packages],
-      ['Unresolved', graphStats.unresolved],
-    ]) {
-      const fact = el('div');
-      fact.append(el('strong', { text: number(value) }), el('span', { text: label }));
-      stats.append(fact);
-    }
-    graphBody.append(stats);
-    const hubs = mostDependedOn(graph, 3);
-    if (hubs.length) {
-      const list = el('ul', { className: 'overview-hubs' });
-      for (const hub of hubs) {
-        list.append(el('li', { text: `${nodeLabel(hub.id)} — ${number(hub.dependents)} dependents` }));
-      }
-      graphBody.append(el('p', { text: 'Most depended-on files', className: 'overview-subhead' }), list);
-    }
-    graphBody.append(el('button', {
-      className: 'secondary',
-      type: 'button',
-      text: 'Open map →',
-      on: { click: () => ctx.view('map') },
+  /* 3 — top blast radius leaderboard */
+  const leaderPanel = el('section', { className: 'col-8 panel panel--key' });
+  const leaderboard = el('div', { className: 'leaderboard' });
+  const leaderHead = el('div', { className: 'leader-head' });
+  leaderHead.append(
+    el('span', { text: 'Rank', attrs: { 'aria-hidden': 'true' } }),
+    el('span', { text: 'Module' }),
+    el('span', { text: 'Blast', attrs: { 'aria-hidden': 'true' } }),
+    el('span', { text: 'Affected', attrs: { 'aria-hidden': 'true' } }),
+  );
+  leaderboard.append(leaderHead);
+  if (!ranked.length) {
+    leaderboard.append(el('div', {
+      className: 'leader-empty',
+      text: scan.mode === 'health'
+        ? 'Tree impact is disabled in health mode.'
+        : 'No finding affects another checked file.',
     }));
+  } else {
+    ranked.forEach((issue, index) => leaderboard.append(leaderRow(issue, index, ctx)));
   }
-  graphPanel.append(graphBody);
-  grid.append(graphPanel);
+  leaderPanel.append(
+    panelHead(
+      'Top blast radius',
+      'Modules ranked by downstream files affected.',
+      top
+        ? `${pad2(top.impact?.affected_count ?? 0)} / ${pad2(top.impact?.eligible_count ?? 0)} ELIGIBLE`
+        : '0 / 0 ELIGIBLE',
+    ),
+    leaderboard,
+  );
+  grid.append(leaderPanel);
+
+  /* 4 — coverage bar (checked vs unsupported) */
+  const unsupported = scan.not_checked_count ?? 0;
+  const excluded = scan.excluded_files?.length ?? 0;
+  const skipped = scan.skipped_files?.length ?? 0;
+  const coveragePanel = el('section', { className: 'col-12 panel coverage-panel' });
+  const coverageTop = el('div', { className: 'coverage-top' });
+  const coverageBig = el('div', { className: 'coverage-big' });
+  coverageBig.append(
+    el('span', { text: percent(checkedShare) }),
+    el('span', { className: 'denom', text: '%' }),
+  );
+  const coverageCopy = el('div');
+  coverageCopy.append(
+    el('div', { className: 'micro', text: 'Checked vs unsupported' }),
+    el('div', {
+      className: 'coverage-note',
+      text: `${number(checked)} checked · ${number(unsupported)} unsupported · ${number(excluded)} excluded · ${number(skipped)} skipped`,
+    }),
+  );
+  coverageTop.append(coverageBig, coverageCopy);
+
+  // Class-based widths only: the checked span takes a 5% bucket, the
+  // unsupported span flexes into the remainder — exact for any ratio.
+  const bar = el('div', {
+    className: 'coverage-bar',
+    attrs: {
+      role: 'img',
+      'aria-label': `Coverage: ${number(checked)} of ${number(discovered)} files checked, ${number(unsupported)} unsupported.`,
+    },
+  });
+  const checkedBucket = unsupported > 0
+    ? Math.min(95, Math.round(checkedShare / 5) * 5)
+    : Math.min(100, Math.round(checkedShare / 5) * 5);
+  bar.append(el('span', { className: `checked ${widthBucket(checkedBucket)}` }));
+  if (unsupported > 0) bar.append(el('span', { className: 'unsupported' }));
+
+  const coverageMeta = el('div', { className: 'coverage-meta' });
+  for (const [key, value] of [
+    ['Checked', checked],
+    ['Unsupported', unsupported],
+    ['Discovered', discovered],
+  ]) {
+    const cell = el('div', { className: 'cov-cell' });
+    cell.append(
+      el('div', { className: 'key', text: key }),
+      el('div', { className: 'val', text: number(value) }),
+    );
+    coverageMeta.append(cell);
+  }
+
+  coveragePanel.append(
+    panelHead('Coverage', 'Explicit about what was checked.', `${pad2(checked)} / ${pad2(discovered)} FILES`),
+    coverageTop,
+    bar,
+    coverageMeta,
+  );
+  grid.append(coveragePanel);
 
   container.append(grid);
 
   // format is part of the contract; use it for the scan identity line so the
-  // dashboard never hand-rolls date handling.
-  const meta = el('p', {
+  // dashboard never hand-rolls date or id handling.
+  container.append(el('p', {
     className: 'note overview-meta',
-    text: `Scan ${scan.id} · ${format.modeLabel(scan.mode)} · ${scan.partial ? 'partial coverage' : 'complete'}`,
-  });
-  container.append(meta);
+    text: `Scan ${format.shortId(scan.id, 8)} · ${format.modeLabel(scan.mode)}${scan.partial || scan.graph_partial ? ' · partial coverage' : ' · complete'}`,
+  }));
 }

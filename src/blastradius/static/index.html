@@ -1,14 +1,16 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="light">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
   <meta name="blastradius-token" content="__SESSION_TOKEN__">
   <title>BlastRadius · Repository health</title>
   <!-- All assets are same-origin files served by harness.py; CSP stays 'self'. -->
   <!-- Document-relative URLs: correct when the page is served at "/", and
        resolvable on disk so the repository's own HTML link check stays clean. -->
   <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="styles/shell.css">
   <link rel="stylesheet" href="styles/overview.css">
   <link rel="stylesheet" href="styles/findings.css">
   <link rel="stylesheet" href="styles/map.css">
@@ -20,31 +22,171 @@
 </head>
 <body>
   <a class="skip-link" href="#main-content" id="skip-link">Skip to content</a>
-  <aside class="sidebar">
-    <a class="brand" href="#overview" aria-label="BlastRadius home"><span class="brand-mark" aria-hidden="true">◎</span><span>BLAST<span class="accent">RADIUS</span><small>REPOSITORY INTELLIGENCE</small></span></a>
-    <div class="nav-label">WORKSPACE</div>
-    <nav aria-label="Report sections">
-      <button class="nav-item active" data-view="overview"><span aria-hidden="true">◈</span> Overview</button>
-      <button class="nav-item" data-view="findings"><span aria-hidden="true">≋</span> Findings <span id="nav-count" class="count">0</span></button>
-      <button class="nav-item" data-view="map"><span aria-hidden="true">⌗</span> Map</button>
-      <button class="nav-item" data-view="dependencies"><span aria-hidden="true">⇄</span> Dependencies</button>
-      <button class="nav-item" data-view="coverage"><span aria-hidden="true">▦</span> Coverage</button>
-      <button class="nav-item" data-view="history"><span aria-hidden="true">◷</span> Saved scans</button>
-    </nav>
-    <div class="sidebar-bottom"><span class="status-dot"></span> Local workspace<p>Your source stays on this machine.<br>Scans never change your files.</p></div>
-  </aside>
-  <main id="main-content" tabindex="-1">
-    <header class="topbar"><div><span class="muted">Workspace / </span><strong id="project-name">Connecting…</strong></div><div class="topbar-actions"><span class="pill">READ-ONLY SCANNER</span><button id="theme-toggle" class="secondary" type="button" aria-label="Switch to light theme" aria-pressed="false">☾</button></div></header>
-    <section class="page-heading"><div><div class="eyebrow">SEE THE WHOLE PICTURE</div><h1 id="page-title">Repository health<span class="accent">.</span></h1><p id="page-subtitle">Find what’s broken. Understand what depends on it.</p></div><div id="scan-state" class="scan-state">Ready to scan</div></section>
-    <form id="scan-form" class="scan-controls">
-      <div class="field path-field"><label for="scan-path">Directory within workspace</label><input id="scan-path" value="." autocomplete="off" spellcheck="false"><small id="root-path"></small></div>
-      <div class="field"><label for="scan-mode">Scan mode</label><select id="scan-mode"><option value="all">Full scan</option><option value="structure">Structure only</option><option value="health">Health only</option></select></div>
-      <button id="scan-button" class="primary" type="submit">Run scan <span aria-hidden="true">↗</span></button>
-    </form>
-    <div id="notice" role="status" aria-live="polite" hidden></div>
-    <div id="report-actions" class="report-actions" hidden><span id="report-id" class="mono muted"></span><div><button id="save-button" class="secondary" hidden>Save scan</button><button id="export-button" class="secondary">Export JSON ↓</button></div></div>
-    <div id="view-root" class="view-root"></div>
-    <footer><span>BLASTRADIUS</span><p>Static analysis. Explicit coverage. No files changed.</p><span id="footer-status">Waiting for a scan</span></footer>
-  </main>
+
+  <div class="app">
+    <aside class="rail">
+      <a class="brand" href="#overview" aria-label="BlastRadius home">
+        <span class="brand-mark" aria-hidden="true">BR</span>
+        <span>
+          <span class="brand-name">BLASTRADIUS</span>
+          <span class="brand-sub">Harness / 0.4</span>
+        </span>
+      </a>
+
+      <nav class="nav" aria-label="Primary">
+        <div class="nav-label">Workspace</div>
+        <div class="nav-items">
+          <button class="nav-item" type="button" data-view="overview">
+            <span class="idx" aria-hidden="true">01</span>
+            <span>Overview</span>
+          </button>
+          <button class="nav-item" type="button" data-view="findings">
+            <span class="idx" aria-hidden="true">02</span>
+            <span>Findings</span>
+            <span class="nav-count" id="nav-count">0</span>
+          </button>
+          <button class="nav-item" type="button" data-view="map">
+            <span class="idx" aria-hidden="true">03</span>
+            <span>Map</span>
+          </button>
+          <button class="nav-item" type="button" data-view="dependencies">
+            <span class="idx" aria-hidden="true">04</span>
+            <span>Dependencies</span>
+          </button>
+          <button class="nav-item" type="button" data-view="coverage">
+            <span class="idx" aria-hidden="true">05</span>
+            <span>Coverage</span>
+          </button>
+          <button class="nav-item" type="button" data-view="history">
+            <span class="idx" aria-hidden="true">06</span>
+            <span>Saved scans</span>
+          </button>
+        </div>
+      </nav>
+
+      <div class="rail-foot">
+        <div class="rail-scan" id="rail-scan">NO SCAN</div>
+        <div class="row"><span>Issues</span><strong id="rail-issues">—</strong></div>
+        <div class="row"><span>Checked</span><strong id="rail-checked">—</strong></div>
+        <div class="row"><span>Mode</span><strong>Read-only</strong></div>
+      </div>
+    </aside>
+
+    <div class="workspace">
+      <header class="topbar">
+        <div class="topbar-left">
+          <div class="project-wrap">
+            <button class="project-btn" id="project-btn" type="button" aria-haspopup="menu" aria-expanded="false" aria-controls="project-menu">
+              <span class="proj-kicker" aria-hidden="true">Project</span>
+              <span class="proj-path" id="project-label">Connecting…</span>
+              <span class="proj-chev" aria-hidden="true">▾</span>
+              <span class="sr-only" id="project-name">Connecting…</span>
+            </button>
+            <div class="project-menu" id="project-menu" role="menu" aria-label="Switch project" hidden></div>
+          </div>
+        </div>
+        <div class="topbar-right">
+          <button class="btn btn--ghost" id="theme-toggle" type="button" aria-pressed="false" aria-label="Switch to dark theme">
+            <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true">
+              <circle cx="7" cy="7" r="6" fill="none" stroke="currentColor" stroke-width="1"></circle>
+              <path d="M7 1a6 6 0 0 0 0 12z" fill="currentColor"></path>
+            </svg>
+            <span id="theme-label">Dark</span>
+          </button>
+          <button class="btn btn--ghost" id="palette-trigger" type="button" aria-label="Open command palette" aria-haspopup="dialog">
+            <span class="mono" aria-hidden="true">⌘K</span>
+            <span class="hint-label" aria-hidden="true">Commands</span>
+          </button>
+        </div>
+      </header>
+
+      <div class="notice-wrap">
+        <div class="notice-inner">
+          <div class="notice" id="notice" role="status" aria-live="polite" hidden>
+            <span class="notice-mark" aria-hidden="true"></span>
+            <div class="notice-copy">
+              <strong id="notice-title">Notice</strong>
+              <span id="notice-body"></span>
+            </div>
+            <button class="notice-close" id="notice-close" type="button" aria-label="Dismiss notice">×</button>
+          </div>
+        </div>
+      </div>
+
+      <main id="main-content" tabindex="-1">
+        <div class="view-inner">
+          <header class="view-head">
+            <div class="view-title-wrap">
+              <div class="view-kicker">
+                <span class="num" id="page-kicker-num">01</span>
+                <span class="slash" aria-hidden="true">/</span>
+                <span id="page-kicker-label">Overview</span>
+              </div>
+              <h1 id="page-title">Repository health</h1>
+              <p class="view-subtitle" id="page-subtitle">Find what’s broken. Understand what depends on it.</p>
+            </div>
+            <div class="view-head-meta">
+              <span class="strong" id="page-meta-strong">No scan loaded</span>
+              <span id="page-meta-path">Local workspace</span>
+              <span id="page-meta-note">Read-only analysis</span>
+            </div>
+          </header>
+
+          <form id="scan-form" class="scan-strip" autocomplete="off">
+            <div class="field path-field">
+              <label for="scan-path">Directory within workspace</label>
+              <input id="scan-path" name="path" value="." autocomplete="off" spellcheck="false">
+              <small id="root-path">Resolving workspace…</small>
+            </div>
+            <div class="field mode-field">
+              <label for="scan-mode">Scan mode</label>
+              <select id="scan-mode" name="mode">
+                <option value="all">Full scan</option>
+                <option value="structure">Structure only</option>
+                <option value="health">Health only</option>
+              </select>
+            </div>
+            <button id="scan-button" class="btn btn--solid primary" type="submit">Run scan <span aria-hidden="true">↗</span></button>
+            <div id="scan-state" class="scan-state" role="status" aria-live="polite">Ready to scan</div>
+          </form>
+
+          <div id="report-actions" class="report-actions" hidden>
+            <span id="report-id" class="mono muted"></span>
+            <div>
+              <button id="save-button" class="btn btn--ghost" type="button" hidden>Save scan</button>
+              <button id="export-button" class="btn btn--ghost" type="button">Export JSON ↓</button>
+            </div>
+          </div>
+
+          <div id="view-root" class="view-root"></div>
+        </div>
+      </main>
+
+      <footer class="statusbar">
+        <span class="status-item"><span class="status-dot" aria-hidden="true"></span><span id="footer-status">Waiting for a scan</span></span>
+        <span class="status-item" id="status-view">View / Overview</span>
+        <span class="status-item" id="status-summary">No report</span>
+        <span class="status-item status-right" id="status-path">Local workspace · Offline</span>
+      </footer>
+    </div>
+  </div>
+
+  <!-- Command palette (Ctrl/Cmd-K). Rendered and wired by lib/palette.js. -->
+  <div class="palette-overlay" id="palette-overlay" hidden>
+    <div class="palette" role="dialog" aria-modal="true" aria-labelledby="palette-title">
+      <h2 class="sr-only" id="palette-title">Command palette</h2>
+      <div class="palette-input-wrap">
+        <span class="palette-caret" aria-hidden="true">›</span>
+        <input class="palette-input" id="palette-input" type="text" placeholder="Type a command…" autocomplete="off" spellcheck="false" role="combobox" aria-autocomplete="list" aria-expanded="true" aria-controls="palette-list" aria-activedescendant="">
+        <span class="palette-esc" aria-hidden="true">ESC</span>
+      </div>
+      <ul class="palette-list" id="palette-list" role="listbox" aria-label="Commands"></ul>
+      <div class="palette-foot" aria-hidden="true">
+        <span>↑↓ Navigate</span>
+        <span>↵ Run</span>
+        <span>Esc Close</span>
+      </div>
+    </div>
+  </div>
 </body>
 </html>

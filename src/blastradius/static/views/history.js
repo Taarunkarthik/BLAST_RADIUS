@@ -4,6 +4,12 @@
  * Contract: export function render(container, ctx)
  * ctx = { state, api, node, notify, format, tree, graph, setState, view }
  *
+ * Ported from the approved Swiss preview (preview.html): a three-card stat
+ * strip, coverage caveats promoted above the table, then ONE flat diff-table
+ * whose group header rows divide added / resolved / changed / unverified
+ * findings. `changed` records carry a field-level base → head detail row
+ * directly beneath them.
+ *
  * Loads through ctx.api('/api/history') and compares through
  * ctx.api('/api/compare', {base, head}). The shell still gates the Save button
  * on session.persistence; this view explains why history is unavailable.
@@ -16,35 +22,35 @@
 
 import { el, emptyBlock } from '../lib/dom.js';
 
-// Categories rendered as tables, in report order. Each carries its own accent.
+// Group header rows inside the flat diff-table, in report order.
 const CATEGORIES = [
-  { key: 'added', label: 'Added', hint: 'Findings present in the head scan but not the base.' },
-  { key: 'resolved', label: 'Resolved', hint: 'Base findings absent from the head’s verified coverage.' },
-  { key: 'changed', label: 'Changed', hint: 'The same finding with one or more modified fields.' },
-  { key: 'unverified', label: 'Unverified', hint: 'Base findings the head scan could not verify.' },
+  { key: 'added', label: 'Added', sign: '+', delta: 'NEW' },
+  { key: 'resolved', label: 'Resolved', sign: '−', delta: 'CLOSED' },
+  { key: 'changed', label: 'Changed', sign: '~', delta: null },
+  { key: 'unverified', label: 'Unverified', sign: '?', delta: 'UNVERIFIED' },
 ];
-
-// Order matches /api/compare summary keys so the strip reads like the CLI.
-const SUMMARY_KEYS = ['added', 'resolved', 'changed', 'unchanged', 'unverified'];
 
 // Fields we diff for a "changed" record; everything else is summarised.
 const DIFF_FIELDS = ['file', 'line', 'type', 'severity', 'target'];
 
-// Guard rails: never paint an unbounded table.
+// Guard rail: never paint an unbounded table.
 const ROW_LIMIT = 100;
+
+function pad2(value) {
+  return String(value).padStart(2, '0');
+}
 
 /* ------------------------------------------------------------------ pieces */
 
 function partialBadge(partial) {
-  return el('span', {
-    className: `badge ${partial ? 'partial' : 'complete'}`,
-    text: partial ? 'Partial' : 'Complete',
-  });
+  return partial
+    ? el('span', { className: 'badge badge--unchecked', text: 'Partial' })
+    : el('span', { className: 'badge badge--clean', text: 'Complete' });
 }
 
 function severityBadge(severity) {
   const value = severity || 'unknown';
-  return el('span', { className: `badge ${value}`, text: value });
+  return el('span', { className: `badge badge--${value}`, text: value.toUpperCase() });
 }
 
 function unconfiguredNote() {
@@ -86,30 +92,34 @@ function compareControls(scans, format) {
   headField.append(el('label', { text: 'Head scan' }), head);
 
   const button = el('button', {
-    className: 'primary',
+    className: 'btn',
     type: 'button',
     text: 'Compare scans',
     disabled: scans.length < 2,
   });
-  wrapper.append(baseField, el('span', { text: '→', attrs: { 'aria-hidden': 'true' } }), headField, button);
+  wrapper.append(baseField, el('span', { className: 'compare-arrow', text: '→', attrs: { 'aria-hidden': 'true' } }), headField, button);
   return { wrapper, base, head, button };
 }
 
-/** Compact per-category counters. */
-function summaryStrip(summary, format) {
-  const strip = el('div', { className: 'compare-stats' });
-  for (const key of SUMMARY_KEYS) {
-    const stat = el('div', { className: `compare-stat ${key}` });
-    stat.append(
-      el('strong', { text: format.number(summary?.[key] ?? 0) }),
-      el('span', { text: key }),
-    );
-    strip.append(stat);
+/** Three-card strip: added / resolved / changed counts, monochrome. */
+function summaryStrip(result, format) {
+  const base = result.base_saved_id ?? result.base_id;
+  const strip = el('div', { className: 'diff-summary' });
+  for (const [key, value, note] of [
+    ['Added', `+${format.number(result.summary?.added ?? 0)}`, 'New findings'],
+    ['Resolved', `−${format.number(result.summary?.resolved ?? 0)}`, `Closed since ${format.shortId(base)}`],
+    ['Changed', `~${format.number(result.summary?.changed ?? 0)}`, 'Identity updated'],
+  ]) {
+    const card = el('div', { className: `diff-card diff-card--${key.toLowerCase()}` });
+    const v = el('div', { className: 'v' });
+    v.append(document.createTextNode(value), el('span', { text: note }));
+    card.append(el('div', { className: 'k', text: key }), v);
+    strip.append(card);
   }
   return strip;
 }
 
-/** Coverage caveats, promoted above the tables rather than buried as lines. */
+/** Coverage caveats, promoted above the table rather than buried as lines. */
 function warningsBlock(result, format) {
   const warnings = result.warnings ?? [];
   const coverage = result.coverage ?? {};
@@ -117,10 +127,10 @@ function warningsBlock(result, format) {
   const newly = coverage.newly_checked ?? [];
   if (!warnings.length && !noLonger.length && !newly.length) return null;
 
-  const box = el('div', { className: `compare-warnings${result.partial ? ' partial' : ''}` });
+  const box = el('div', { className: 'compare-warnings' });
   const head = el('div', { className: 'compare-warnings-head' });
   head.append(
-    el('span', { text: '⚠', className: 'compare-warnings-glyph', attrs: { 'aria-hidden': 'true' } }),
+    el('span', { className: 'compare-warnings-glyph', text: '⚠', attrs: { 'aria-hidden': 'true' } }),
     el('strong', { text: result.partial ? 'Partial comparison · coverage caveats' : 'Coverage caveats' }),
   );
   box.append(head);
@@ -157,17 +167,7 @@ function fieldValue(field, value, format) {
   return String(value);
 }
 
-function issueCells(issue, format) {
-  return [
-    el('td', {}, severityBadge(issue.severity)),
-    el('td', { className: 'mono compare-file', text: issue.file ?? '—' }),
-    el('td', { className: 'mono', text: format.number(issue.line) }),
-    el('td', { text: issue.type ?? '—' }),
-    el('td', { className: 'mono', text: issue.target || '—' }),
-  ];
-}
-
-/** Field-level base → head diff, one row spanning the whole table. */
+/** Field-level base → head diff, one detail row spanning the whole table. */
 function diffRow(record, format) {
   const row = el('tr', { className: 'diff-row' });
   const cell = el('td', { attrs: { colspan: '5' } });
@@ -199,88 +199,132 @@ function diffRow(record, format) {
   return row;
 }
 
-function categoryTable(category, records, format) {
-  const block = el('section', { className: `compare-group ${category.key}` });
-  const heading = el('div', { className: 'compare-group-head' });
-  heading.append(
-    el('h3', { text: category.label }),
-    el('span', { className: 'count', text: format.number(records.length) }),
-  );
-  block.append(heading, el('p', { className: 'note', text: category.hint }));
-
-  if (!records.length) {
-    block.append(el('p', { className: 'note compare-none', text: 'None' }));
-    return block;
-  }
-
-  const wrap = el('div', { className: 'compare-table-wrap' });
-  const table = el('table', { className: 'compare-table' });
-  const thead = el('thead');
+/** The flat Swiss diff-table: group header rows divide the four categories. */
+function comparisonTable(result, format) {
+  const wrap = el('div', { className: 'table-scroll' });
+  const table = el('table', { className: 'diff-table' });
   const headRow = el('tr');
-  for (const label of ['Severity', 'File', 'Line', 'Type', 'Target']) {
+  for (const label of ['Change', 'Path', 'Finding', 'Delta', 'Severity']) {
     headRow.append(el('th', { text: label, attrs: { scope: 'col' } }));
   }
-  thead.append(headRow);
+  table.append(el('thead', {}, headRow));
 
-  const tbody = el('tbody');
-  for (const record of records.slice(0, ROW_LIMIT)) {
-    const issue = category.key === 'changed' ? record.head : record;
-    const row = el('tr', { className: `compare-row ${category.key}` });
-    row.append(...issueCells(issue ?? {}, format));
-    tbody.append(row);
-    if (category.key === 'changed') tbody.append(diffRow(record, format));
+  const capNotes = [];
+  for (const category of CATEGORIES) {
+    const records = result[category.key] ?? [];
+    const tbody = el('tbody');
+
+    const groupRow = el('tr', { className: 'diff-group' });
+    const groupCell = el('th', { attrs: { colspan: '5', scope: 'colgroup' } });
+    groupCell.append(document.createTextNode(category.label), el('span', { text: pad2(records.length) }));
+    groupRow.append(groupCell);
+    tbody.append(groupRow);
+
+    if (!records.length) {
+      const emptyRow = el('tr');
+      const emptyCell = el('td', { attrs: { colspan: '5' } });
+      emptyCell.append(el('span', { className: 'diff-empty-note', text: 'None in this comparison.' }));
+      emptyRow.append(emptyCell);
+      tbody.append(emptyRow);
+    }
+
+    for (const record of records.slice(0, ROW_LIMIT)) {
+      const issue = category.key === 'changed' ? (record.head ?? {}) : (record ?? {});
+      const row = el('tr', { className: `compare-row ${category.key}` });
+
+      const change = el('td', {});
+      change.append(el('span', { className: 'diff-sign', text: category.sign }));
+
+      const path = el('td', { className: 'path' });
+      path.append(
+        document.createTextNode(issue.file ?? '—'),
+        el('span', { className: 'loc', text: `:${format.number(issue.line ?? 0)}` }),
+      );
+
+      const delta = category.key === 'changed'
+        ? (record.fields ?? []).map(field => field.toUpperCase()).join(' · ') || 'UPDATED'
+        : category.delta;
+
+      row.append(
+        change,
+        path,
+        el('td', { text: issue.type ?? '—' }),
+        el('td', { className: 'delta', text: delta }),
+      );
+      const sevCell = el('td', { className: 'sev' });
+      sevCell.append(severityBadge(issue.severity));
+      row.append(sevCell);
+      tbody.append(row);
+
+      if (category.key === 'changed') tbody.append(diffRow(record, format));
+    }
+    table.append(tbody);
+
+    if (records.length > ROW_LIMIT) {
+      capNotes.push(`Showing the first ${format.number(ROW_LIMIT)} of ${format.number(records.length)} ${category.label.toLowerCase()}.`);
+    }
   }
-  table.append(thead, tbody);
+
   wrap.append(table);
-  block.append(wrap);
-
-  if (records.length > ROW_LIMIT) {
-    block.append(el('p', {
-      className: 'note',
-      text: `Showing the first ${format.number(ROW_LIMIT)} of ${format.number(records.length)} ${category.label.toLowerCase()} findings. Export JSON for the full comparison.`,
-    }));
+  const fragment = el('div', { className: 'diff-table-cap' });
+  for (const note of capNotes) {
+    fragment.append(el('p', { className: 'note', text: `${note} Export JSON for the full comparison.` }));
   }
-  return block;
+  fragment.prepend(wrap);
+  return fragment;
 }
 
 function comparisonResult(result, format) {
   const fragment = el('div', { className: 'comparison-result' });
-  fragment.append(summaryStrip(result.summary, format));
+  fragment.append(summaryStrip(result, format));
 
   const warnings = warningsBlock(result, format);
   if (warnings) fragment.append(warnings);
 
   const base = result.base_saved_id ?? result.base_id;
   const head = result.head_saved_id ?? result.head_id;
-  fragment.append(el('p', {
-    className: 'note compare-meta',
-    text: `Base ${format.shortId(base)} → Head ${format.shortId(head)}`,
-  }));
 
-  for (const category of CATEGORIES) {
-    fragment.append(categoryTable(category, result[category.key] ?? [], format));
-  }
+  const panel = el('section', { className: 'panel diff-panel' });
+  const panelHead = el('div', { className: 'panel-head' });
+  const copy = el('div');
+  copy.append(
+    el('h2', { text: 'Scan diff' }),
+    el('div', { className: 'panel-sub', text: 'Added, resolved and changed findings between two scans.' }),
+  );
+  panelHead.append(copy, el('span', { className: 'micro', text: `${format.shortId(base)} → ${format.shortId(head)}` }));
+  panel.append(panelHead, comparisonTable(result, format));
+  fragment.append(panel);
   return fragment;
 }
 
-function historyList(scans, format) {
-  const list = el('div', { className: 'history-list' });
+function historySection(scans, format, onRefresh) {
+  const section = el('section', { className: 'history-section' });
+  const head = el('div', { className: 'history-section-head' });
+  const refresh = el('button', { className: 'btn btn--ghost history-refresh', type: 'button', text: 'Refresh' });
+  if (onRefresh) refresh.addEventListener('click', onRefresh);
+  head.append(
+    el('h2', { text: 'Saved scans' }),
+    el('span', { className: 'count', text: `${pad2(scans.length)} SCANS` }),
+    refresh,
+  );
+  section.append(head);
+
   for (const scan of scans) {
     const row = el('div', { className: 'history-row' });
     const main = el('div', { className: 'history-row-main' });
     main.append(
-      el('span', { className: 'history-time', text: format.dateTime(scan.saved_at) }),
+      el('span', { className: 'history-time mono', text: format.dateTime(scan.saved_at) }),
       el('span', { className: 'history-mode', text: format.modeLabel(scan.mode) }),
     );
     const meta = el('div', { className: 'history-row-meta' });
     meta.append(
       partialBadge(scan.partial),
-      el('span', { className: 'mono history-id', text: format.shortId(scan.id) }),
+      el('span', { className: 'history-id mono', text: format.shortId(scan.id) }),
     );
     row.append(main, meta);
-    list.append(row);
+    section.append(row);
   }
-  return list;
+  return section;
 }
 
 /* ------------------------------------------------------------------ render */
@@ -290,20 +334,8 @@ export function render(container, ctx) {
   const session = state.session;
   container.replaceChildren();
 
-  const shell = el('section', { className: 'panel history-panel' });
-  const heading = el('div', { className: 'panel-heading' });
-  const copy = el('div');
-  copy.append(el('h2', { text: 'Saved scans' }), el('p', { text: 'Compare how this workspace changes over time' }));
-  const refresh = el('button', { className: 'secondary', type: 'button', text: 'Refresh' });
-  heading.append(copy, refresh);
-  shell.append(heading);
-
-  const body = el('div', { className: 'section-content' });
-  shell.append(body);
-  container.append(shell);
-
   if (!session?.persistence) {
-    body.append(unconfiguredNote());
+    container.append(unconfiguredNote());
     return;
   }
 
@@ -312,7 +344,7 @@ export function render(container, ctx) {
   const loading = el('p', { className: 'note', text: 'Loading this workspace’s saved scans…' });
 
   function paint(history, error) {
-    body.replaceChildren(note);
+    container.replaceChildren(note);
     if (error) {
       note.textContent = error;
       return;
@@ -320,19 +352,19 @@ export function render(container, ctx) {
 
     const scans = history?.scans ?? [];
     note.textContent = scans.length
-      ? `${format.number(scans.length)} saved ${format.plural(scans.length, 'scan')} for ${history.project?.name ?? 'this workspace'}. Select a base and head to compare.`
+      ? `${format.number(scans.length)} saved ${format.plural(scans.length, 'scan')} for ${history.project?.name ?? 'this workspace'}.`
       : 'No saved scans yet. Run a scan, then choose Save scan.';
 
     if (!scans.length) {
-      body.append(emptyBlock('No saved scans', 'Save a scan to build a history you can compare.', '◷'));
+      container.append(emptyBlock('No saved scans', 'Save a scan to build a history you can compare.', '◷'));
       return;
     }
 
     const { wrapper, base, head, button } = compareControls(scans, format);
-    body.append(wrapper);
+    container.append(wrapper);
 
     const output = el('div', { className: 'comparison-output' });
-    body.append(output);
+    container.append(output);
 
     button.addEventListener('click', async () => {
       button.disabled = true;
@@ -340,19 +372,19 @@ export function render(container, ctx) {
       try {
         const result = await api('/api/compare', { base: base.value, head: head.value });
         output.replaceChildren(comparisonResult(result, format));
-      } catch (error) {
-        notify(error.message);
-        output.replaceChildren(el('p', { className: 'note', text: error.message }));
+      } catch (compareError) {
+        notify(compareError.message);
+        output.replaceChildren(el('p', { className: 'note', text: compareError.message }));
       } finally {
         button.disabled = false;
       }
     });
 
-    body.append(historyList(scans, format));
+    container.append(historySection(scans, format, load));
   }
 
   async function load() {
-    body.replaceChildren(note, loading);
+    container.replaceChildren(note, loading);
     try {
       const history = await api('/api/history');
       // Storing the payload re-renders this view, which paints from the cache.
@@ -362,7 +394,6 @@ export function render(container, ctx) {
     }
   }
 
-  refresh.addEventListener('click', load);
   if (cache) paint(cache, null);
   else load();
 }

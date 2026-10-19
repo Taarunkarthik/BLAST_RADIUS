@@ -4,16 +4,27 @@
  * Contract: export function render(container, ctx)
  * ctx = { state, api, node, notify, format, tree, graph, setState, view }
  *
- * The summary strip is a tiny inline SVG (no libraries, no inline styles): the
- * stacked segments are sized from `report.scan` counts and coloured by class.
- * Every file row is a button that opens Findings (deep-linked to the file's
- * top finding) when there is one, otherwise the Map with `graphFocus` set.
+ * Ported from the approved Swiss preview (preview.html): a bordered summary
+ * block with the checked ratio, a monochrome stacked bar and per-category
+ * count lines, then bordered-topped groups of cov-tables. File rows are
+ * clickable: files with findings deep-link into Findings, every other file
+ * opens the Map with `graphFocus` set so the tree can centre it.
+ *
+ * Presentation rules: DOM + textContent only (no innerHTML), no inline styles
+ * (the harness CSP allows stylesheets only). Every value passes through
+ * ctx.format so numbers and ids read consistently with the rest of the
+ * harness.
  */
 
 import { el, svg, emptyState } from '../lib/dom.js';
-import { issueId, number, percent } from '../lib/format.js';
+import { issueId, number, percent, plural, severityRank, shortId } from '../lib/format.js';
 
+// Guard rail: never paint an unbounded table.
 const PAGE = 200;
+
+function pad2(value) {
+  return String(value).padStart(2, '0');
+}
 
 /** Accept a scan file entry as a string or a `{file, reason, ...}` object. */
 function fileInfo(item, fallbackReason = '') {
@@ -26,12 +37,24 @@ function fileInfo(item, fallbackReason = '') {
   };
 }
 
-/** Map every file to the stable id of its highest-priority finding. */
-function firstFindingByFile(report) {
-  const map = new Map();
+/** Per-file finding counts, for the Checked group's analysis column. */
+function findingsByFile(report) {
+  const counts = new Map();
   for (const issue of report?.issues ?? []) {
-    if (!issue?.file || map.has(issue.file)) continue;
-    map.set(issue.file, issueId(issue));
+    if (!issue?.file) continue;
+    counts.set(issue.file, (counts.get(issue.file) ?? 0) + 1);
+  }
+  return counts;
+}
+
+/** Map every file to the stable id of its highest-severity finding. */
+function firstFindingByFile(report) {
+  const ordered = [...(report?.issues ?? [])]
+    .filter(issue => issue?.file)
+    .sort((left, right) => severityRank(left.severity) - severityRank(right.severity));
+  const map = new Map();
+  for (const issue of ordered) {
+    if (!map.has(issue.file)) map.set(issue.file, issueId(issue));
   }
   return map;
 }
@@ -50,171 +73,229 @@ function openFile(ctx, file, findingId) {
   ctx.view('map');
 }
 
-/** Compact summary: checked ratio bar plus checked/unsupported/excluded/skipped. */
-function summary(scan, excludedCount, skippedCount) {
-  const discovered = Number(scan.files_discovered) || 0;
-  const checked = Number(scan.files_checked) || 0;
-  const unsupported = Number(scan.not_checked_count) || 0;
-  const ratio = discovered > 0 ? checked / discovered : 0;
-
-  const box = el('div', { className: 'coverage-summary' });
-
-  const head = el('div', { className: 'coverage-summary-head' });
-  const ratioBlock = el('div', { className: 'coverage-ratio' });
-  ratioBlock.append(
-    el('strong', { text: percent(ratio * 100), className: 'coverage-ratio-value' }),
-    el('span', { text: `of ${number(discovered)} discovered files checked`, className: 'coverage-ratio-label' }),
-  );
-  head.append(ratioBlock);
-  if (scan.partial) head.append(el('span', { className: 'pill', text: 'Partial coverage' }));
-  box.append(head);
-
+/** Monochrome stacked bar: black checked, three greys for the rest. */
+function coverageBar(discovered, checked, unsupported, excluded, skipped) {
+  const label = `Coverage: ${number(checked)} of ${number(discovered)} discovered files checked (${percent((checked / Math.max(1, discovered)) * 100)})`;
+  const track = el('div', { className: 'coverage-bar-track' });
   const bar = svg('svg', {
     class: 'coverage-bar',
     viewBox: '0 0 100 10',
     preserveAspectRatio: 'none',
     role: 'img',
-    'aria-label': `Coverage: ${number(checked)} of ${number(discovered)} discovered files checked (${percent(ratio * 100)})`,
+    'aria-label': label,
   });
   bar.append(svg('title', {}, 'Coverage breakdown'));
   let offset = 0;
   for (const [className, value] of [
     ['checked', checked],
     ['unsupported', unsupported],
-    ['excluded', excludedCount],
-    ['skipped', skippedCount],
+    ['excluded', excluded],
+    ['skipped', skipped],
   ]) {
     if (value <= 0 || discovered <= 0) continue;
     const width = (value / discovered) * 100;
     bar.append(svg('rect', { x: offset, y: 0, width, height: 10, class: `coverage-bar-seg ${className}` }));
     offset += width;
   }
-  const track = el('div', { className: 'coverage-bar-track' });
   track.append(bar);
-  box.append(track);
+  return track;
+}
 
-  const legend = el('ul', { className: 'coverage-legend' });
-  for (const [label, value, className] of [
-    ['Checked', checked, 'checked'],
-    ['Unsupported', unsupported, 'unsupported'],
-    ['Excluded', excludedCount, 'excluded'],
-    ['Skipped', skippedCount, 'skipped'],
-  ]) {
-    const item = el('li', { className: 'coverage-legend-item' });
-    item.append(
-      el('span', { className: `coverage-swatch ${className}`, attrs: { 'aria-hidden': 'true' } }),
-      el('strong', { text: number(value) }),
-      el('span', { text: label, className: 'coverage-legend-label' }),
-    );
-    legend.append(item);
-  }
-  const total = el('li', { className: 'coverage-legend-item coverage-legend-total' });
-  total.append(el('strong', { text: number(discovered) }), el('span', { text: 'Discovered', className: 'coverage-legend-label' }));
-  legend.append(total);
-  box.append(legend);
+/** Summary block: ratio headline, stacked bar and the per-category count lines. */
+function summary(scan, excludedCount, skippedCount) {
+  const discovered = Number(scan.files_discovered) || 0;
+  const checked = Number(scan.files_checked) || 0;
+  const unsupported = Number(scan.not_checked_count) || 0;
+  const ratio = discovered > 0 ? checked / discovered : 0;
 
+  const box = el('section', { className: 'coverage-summary' });
+  const top = el('div', { className: 'coverage-summary-top' });
+
+  const left = el('div');
+  left.append(el('h2', { text: `Coverage / scan ${shortId(scan.id)}` }));
+  const big = el('div', { className: 'big' });
+  big.append(document.createTextNode(percent(ratio * 100)), el('small', { text: '%' }));
+  left.append(big);
+
+  const right = el('div', { className: 'coverage-summary-right' });
+  right.append(coverageBar(discovered, checked, unsupported, excludedCount, skippedCount));
+  const rest = [
+    unsupported ? `${number(unsupported)} unsupported` : '',
+    excludedCount ? `${number(excludedCount)} excluded` : '',
+    skippedCount ? `${number(skippedCount)} skipped` : '',
+  ].filter(Boolean);
+  const ratioLine = el('div', { className: 'cov-line' });
+  ratioLine.append(
+    el('span', { text: `${number(checked)} checked` }),
+    el('span', { text: rest.join(' · ') || (scan.partial ? 'Partial scan' : 'Complete scan') }),
+  );
+  right.append(ratioLine);
+
+  top.append(left, right);
+  box.append(top);
+
+  const foot = el('div', { className: 'cov-line' });
+  foot.append(
+    el('span', { text: `${number(discovered)} discovered` }),
+    el('span', { text: scan.partial ? 'Partial coverage' : 'Coverage is explicit' }),
+  );
+  box.append(foot);
   return box;
 }
 
-function group(title, subtitle, items, renderRow) {
-  const block = el('div', { className: 'coverage-group' });
-  block.append(el('h3', { text: `${title} (${number(items.length)})` }));
-  if (subtitle) block.append(el('p', { className: 'note', text: subtitle }));
-  if (!items.length) block.append(el('p', { text: 'None', className: 'note' }));
-  for (const item of items.slice(0, PAGE)) block.append(renderRow(item));
-  if (items.length > PAGE) {
-    block.append(el('p', { text: `Showing ${PAGE} entries. Export JSON for the complete list.`, className: 'note' }));
-  }
-  return block;
+/** A clickable file row: opens Findings when the file has one, else the Map. */
+function fileRow(item, ctx, firstFindings, issueCounts, status, fallbackReason) {
+  const info = fileInfo(item);
+  const findingId = firstFindings.get(info.file) ?? null;
+  const issueCount = issueCounts.get(info.file) ?? 0;
+  const reason = info.reason || fallbackReason || `${number(issueCount)} ${plural(issueCount, 'finding')}`;
+
+  const pathCell = el('td', { className: 'path' });
+  pathCell.append(el('span', { className: 'mono', text: info.file }));
+
+  return el('tr', {
+    className: `cov-row${findingId ? ' has-findings' : ''}`,
+    attrs: {
+      tabindex: '0',
+      role: 'button',
+      'aria-label': `${info.file}: ${findingId ? 'open findings' : 'locate in the dependency map'}`,
+    },
+    on: {
+      click: () => openFile(ctx, info.file, findingId),
+      keydown: event => {
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault();
+          openFile(ctx, info.file, findingId);
+        }
+      },
+    },
+  }, pathCell, el('td', { className: 'reason', text: reason }), el('td', { className: 'status', text: status }));
 }
 
-/** A clickable file row: opens Findings when the file has one, else the Map. */
-function fileRow(item, ctx, findings) {
-  const info = fileInfo(item);
-  const findingId = findings.get(info.file) ?? null;
-  const reason = [info.reason, info.target ? `target ${info.target}` : '', info.line ? `line ${info.line}` : '']
-    .filter(Boolean)
-    .join(' · ');
-
-  const meta = el('span', { className: 'coverage-side' });
-  meta.append(
-    el('span', { className: 'coverage-reason', text: reason }),
-    el('span', { className: `coverage-hint${findingId ? ' has-findings' : ''}`, text: findingId ? 'Findings →' : 'Locate →' }),
+/** A cov-group: bordered-topped section, group head, then a cov-table or empty note. */
+function group(id, label, status, reasonLabel, items, emptyNote, renderRow, unit = 'FILES') {
+  const section = el('section', { className: 'cov-group', attrs: { id: `cov-${id}` } });
+  const head = el('div', { className: 'cov-group-head' });
+  head.append(
+    el('h2', { text: label }),
+    el('span', { className: 'count', text: `${pad2(items.length)} ${unit}` }),
   );
+  section.append(head);
 
-  return el('button', {
-    className: 'coverage-row coverage-row-link',
-    type: 'button',
-    title: `${info.file} — open ${findingId ? 'findings' : 'in the dependency map'}`,
-    attrs: { 'aria-label': `${info.file}: open ${findingId ? 'findings' : 'dependency map'}` },
-    on: { click: () => openFile(ctx, info.file, findingId) },
-  }, el('span', { className: 'coverage-file mono', text: info.file }), meta);
+  if (!items.length) {
+    section.append(el('div', { className: 'cov-empty', text: emptyNote }));
+    return section;
+  }
+
+  const wrap = el('div', { className: 'table-scroll' });
+  const table = el('table', { className: 'cov-table' });
+  const headRow = el('tr');
+  for (const heading of [reasonLabel === 'Analysis' ? 'File' : 'Path', reasonLabel, 'Status']) {
+    headRow.append(el('th', { text: heading, attrs: { scope: 'col' } }));
+  }
+  table.append(el('thead', {}, headRow));
+
+  const tbody = el('tbody');
+  for (const item of items.slice(0, PAGE)) tbody.append(renderRow(item));
+  table.append(tbody);
+  wrap.append(table);
+  section.append(wrap);
+
+  if (items.length > PAGE) {
+    section.append(el('p', {
+      className: 'note cov-cap-note',
+      text: `Showing the first ${number(PAGE)} of ${number(items.length)} entries. Export JSON for the complete list.`,
+    }));
+  }
+  return section;
+}
+
+/** Aggregate rows: unsupported file types with no configured checker. */
+function typeGroup(types) {
+  const section = el('section', { className: 'cov-group', attrs: { id: 'cov-unsupported-by-type' } });
+  const head = el('div', { className: 'cov-group-head' });
+  head.append(
+    el('h2', { text: 'Unsupported by type' }),
+    el('span', { className: 'count', text: `${pad2(types.length)} TYPES` }),
+  );
+  section.append(head);
+
+  if (!types.length) {
+    section.append(el('div', { className: 'cov-empty', text: 'No discovered file type lacks a configured checker.' }));
+    return section;
+  }
+
+  const wrap = el('div', { className: 'table-scroll' });
+  const table = el('table', { className: 'cov-table' });
+  const headRow = el('tr');
+  for (const heading of ['Suffix', 'Files']) {
+    headRow.append(el('th', { text: heading, attrs: { scope: 'col' } }));
+  }
+  table.append(el('thead', {}, headRow));
+
+  const tbody = el('tbody');
+  for (const [suffix, count] of types) {
+    const pathCell = el('td', { className: 'path' });
+    pathCell.append(el('span', { className: 'mono', text: suffix }));
+    tbody.append(el('tr', {}, pathCell, el('td', { className: 'reason', text: `${number(count)} files` })));
+  }
+  table.append(tbody);
+  wrap.append(table);
+  section.append(wrap);
+  return section;
 }
 
 export function render(container, ctx) {
   const report = ctx.state.report;
   container.replaceChildren();
 
-  const shell = el('section', { className: 'panel coverage-panel' });
-  const heading = el('div', { className: 'panel-heading' });
-  const copy = el('div');
-  copy.append(el('h2', { text: 'Coverage' }), el('p', { text: 'A clear account of what was checked and what was not' }));
-  heading.append(copy);
-  shell.append(heading);
-
-  const body = el('div', { className: 'section-content' });
-
   if (!report) {
-    emptyState(body, 'Run a scan to inspect coverage', 'Coverage lists checked, unsupported, excluded and skipped files for the current scan.');
-    shell.append(body);
-    container.append(shell);
+    emptyState(container, 'Run a scan to inspect coverage', 'Coverage lists checked, unsupported, excluded and skipped files for the current scan.', '▦');
     return;
   }
 
   const scan = report.scan ?? {};
-  const checked = (scan.checked_files ?? []).map(file => ({ file, reason: 'Checked' }));
-  const unsupported = (scan.not_checked_files ?? []).map(file => ({ file, reason: 'No configured checker' }));
+  const firstFindings = firstFindingByFile(report);
+  const issueCounts = findingsByFile(report);
+
+  const checked = (scan.checked_files ?? []).map(file => fileInfo(file, ''));
+  const unsupported = (scan.not_checked_files ?? []).map(file => fileInfo(file, 'No configured checker'));
   const excluded = (scan.excluded_files ?? []).map(item => fileInfo(item, 'Excluded'));
   const skipped = (scan.skipped_files ?? []).map(item => fileInfo(item, 'Skipped'));
   const limitations = (scan.limitations ?? []).map(item => fileInfo(item, 'Unresolved'));
-  const findings = firstFindingByFile(report);
 
-  body.append(summary(scan, excluded.length, skipped.length));
+  container.append(summary(scan, excluded.length, skipped.length));
 
   const types = Object.entries(scan.not_checked_by_type ?? {});
-  if (types.length) {
-    body.append(group(
-      'Unsupported by type',
-      'File types with no configured checker',
-      types,
-      ([suffix, count]) => {
-        const row = el('div', { className: 'coverage-row' });
-        row.append(el('span', { text: suffix, className: 'mono' }), el('span', { text: `${number(count)} files` }));
-        return row;
-      },
-    ));
-  }
+  container.append(typeGroup(types));
 
-  body.append(el('p', {
-    className: 'note coverage-hint-line',
-    text: 'Select any file to open its findings, or to locate it on the dependency map.',
-  }));
+  const fileRowFor = status => item =>
+    fileRow(item, ctx, firstFindings, issueCounts, status, null);
 
-  body.append(
-    group('Unsupported files', 'Discovered but not checked', unsupported, item => fileRow(item, ctx, findings)),
-    group('Excluded files', 'Ignored or out of scope for this mode', excluded, item => fileRow(item, ctx, findings)),
-    group('Incomplete checks', 'Read or limit problems', skipped, item => fileRow(item, ctx, findings)),
-    group('Resolution limitations', 'Imports the scanner could not fully resolve', limitations, item => fileRow(item, ctx, findings)),
-    group('Checked files', 'Files that contributed to this report', checked, item => fileRow(item, ctx, findings)),
+  container.append(
+    group('unsupported', 'Unsupported files', 'Unsupported', 'Reason', unsupported,
+      'No discovered file type lacks a configured checker.', fileRowFor('Unsupported')),
+    group('excluded', 'Excluded', 'Excluded', 'Reason', excluded,
+      'No exclusion rules matched any discovered file.', fileRowFor('Excluded')),
+    group('incomplete', 'Incomplete', 'Skipped', 'Reason', skipped,
+      'No files were skipped.', fileRowFor('Skipped')),
+    group('limitations', 'Limitations', 'Limitation', 'Reason', limitations,
+      'Every reference resolved inside the checked file set.', fileRowFor('Limitation')),
+    group('checked', 'Checked', 'Checked', 'Analysis', checked,
+      'No files were checked.', item => {
+        const issueCount = issueCounts.get(item.file) ?? 0;
+        const status = issueCount ? `${number(issueCount)} ISSUE${issueCount === 1 ? '' : 'S'}` : 'OK';
+        return fileRow({ ...item, reason: `${number(issueCount)} ${plural(issueCount, 'finding')}` }, ctx, firstFindings, issueCounts, status, '');
+      }),
   );
 
   if (scan.coverage_notes?.length) {
-    body.append(el('h3', { text: 'Notes' }));
-    const notes = el('ul', { className: 'coverage-notes' });
-    for (const note of scan.coverage_notes) notes.append(el('li', { text: note }));
-    body.append(notes);
+    const notes = el('section', { className: 'cov-group', attrs: { id: 'cov-notes' } });
+    const head = el('div', { className: 'cov-group-head' });
+    head.append(el('h2', { text: 'Scan notes' }), el('span', { className: 'count', text: pad2(scan.coverage_notes.length) }));
+    const list = el('ul', { className: 'coverage-notes' });
+    for (const note of scan.coverage_notes) list.append(el('li', { text: note }));
+    notes.append(head, list);
+    container.append(notes);
   }
-
-  shell.append(body);
-  container.append(shell);
 }

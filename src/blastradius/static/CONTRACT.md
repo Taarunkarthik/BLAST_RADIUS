@@ -8,9 +8,10 @@ own without touching any other file.
 
 ```
 static/
-  index.html          shell markup: sidebar, scan form, notice, #view-root, footer
-  app.js              bootstrap + hash router + shared chrome/events (no view markup)
-  styles.css          design tokens + shell layout
+  index.html          shell markup: rail, top bar, scan strip, notice, #view-root, status bar
+  app.js              bootstrap + hash router + shell chrome (no view markup)
+  styles.css          design tokens + shared primitives + 12-column grid
+  styles/shell.css    rail, top bar, project switcher, palette, notice, status bar
   lib/
     api.js            api(path, body) with X-BlastRadius-Token and error handling
     dom.js            node()/el()/svg()/append()/emptyState() — textContent only
@@ -18,6 +19,7 @@ static/
     format.js         numbers, severity, dates, issueId(), findIssue()
     tree.js           filesystem tree from scan coverage + issues
     graph.js          adjacency, reverse BFS blast radius, layered SVG layout
+    palette.js        command palette behaviour (Ctrl/Cmd-K)
   views/
     overview.js       dashboard
     findings.js       full list + search/severity/pagination + tree-impact detail
@@ -64,6 +66,28 @@ to DOM nodes across calls.
 | `graph` | namespace | `lib/graph.js` |
 | `setState` | `(patch \| (state) => patch) => void` | shallow-merged store update |
 | `view` | `(name, id?) => void` | router navigation / deep link |
+| `theme` | `'light' \| 'dark'` | active shell theme (additive, optional) |
+| `toggleTheme` | `() => void` | flip + persist the theme (additive, optional) |
+| `openPalette` | `() => void` | open the Ctrl/Cmd-K command palette (additive, optional) |
+| `project` | `{ path, label, open }` | scan path relative to the harness root, display label, and `open()` for the project switcher (additive, optional) |
+
+### Shell extensions
+
+These keys are additive: existing views can ignore them and keep using the
+original contract. They exist so new views can reach shell-level actions
+without touching `location.hash`, `localStorage` or the rail directly.
+
+```js
+ctx.theme        // 'light' | 'dark'
+ctx.toggleTheme  // function — flips the theme and persists it
+ctx.openPalette  // function — opens the command palette
+ctx.project      // { path: '.', label: 'demo', open: function }
+```
+
+The project switcher reads `GET /api/directories?path=<relative-path>`, which
+returns `{ path, parent, directories: [{ name, path }] }` scoped to the harness
+root. If the endpoint is missing (older harness) the menu degrades to the
+localStorage recent-folder list and says so; the rest of the shell keeps working.
 
 ### State shape
 
