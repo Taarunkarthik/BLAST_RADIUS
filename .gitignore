@@ -13,3 +13,6 @@ htmlcov/
 .env
 *.log
 
+# local graphify tool output
+graphify-out/
+
