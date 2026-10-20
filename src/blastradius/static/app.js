@@ -343,6 +343,9 @@ function render() {
     currentRoute = name;
     setActiveNav(name);
     setHeading(name);
+    // Expose the route on <body> so a view can opt into a full-bleed layout
+    // (the Dependencies graph hides the shell header/scan chrome and status bar).
+    document.body.dataset.route = name;
 
     const state = store.get();
     syncChrome(state);
