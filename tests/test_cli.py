@@ -3,12 +3,22 @@ import os
 import subprocess
 import sys
 
+import pytest
 from typer.testing import CliRunner
 
+from blastradius import audit
 from blastradius.cli import app
 from blastradius.scanner import scan_repository as real_scan_repository
 
 runner = CliRunner()
+
+
+@pytest.fixture(autouse=True)
+def isolated_audit(tmp_path_factory, monkeypatch):
+    """Keep CLI tests out of the real ~/.blastradius/audit.log."""
+    directory = tmp_path_factory.mktemp("audit")
+    monkeypatch.setenv("BLASTRADIUS_AUDIT_LOG", str(directory / "audit.log"))
+    audit.configure(path=None, enabled=True)
 
 
 def test_json_global_flags_and_stderr_logging(repository):

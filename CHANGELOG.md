@@ -12,6 +12,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Support Python 3.14 in the classifiers and the CI matrix.
 - Enforce mypy type checking and a 75% coverage floor in CI.
 - Add MIT `license`, classifiers, keywords, and `[project.urls]` packaging metadata.
+- Add an append-only local audit log (JSON Lines) recording `scan`, `save`, `compare`, `harness_start`, and `harness_scan` actions, plus `blastradius audit` to read it back.
+- Add `blastradius doctor` for dependency-free environment checks with OK/WARN/FAIL statuses and exact fixes.
+- Add idempotent `scripts/bootstrap.ps1` and `scripts/bootstrap.sh` one-command setup.
+- Rework the harness Dependencies view as a full-bleed graph with curved edges, an orientation toggle, zoom-to-cursor, label collision avoidance, a 300-node cap notice, toolbar Scan/Export, and keyboard navigation.
 
 ### Fixed
 - Send Node parser requests in bounded batches (about 8 MB or 250 files) so peak memory no longer scales with total source size.

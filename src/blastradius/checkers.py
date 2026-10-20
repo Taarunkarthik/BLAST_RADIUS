@@ -103,10 +103,22 @@ def check_dotenv(file: str, content: str) -> list[Issue]:
 
 def available_bash() -> str | None:
     bash = shutil.which("bash")
-    # Windows' legacy WSL launcher is not a Bash executable: it can initialize a
-    # distro or hang instead of honoring Bash's no-execution/startup flags.
-    if bash and os.name == "nt" and Path(bash).parent.name.lower() in {"system32", "sysnative"}:
-        return None
+    if bash and os.name == "nt":
+        parent = Path(bash).parent.name.lower()
+        # Windows' legacy WSL launcher is not a Bash executable: it can initialize
+        # a distro or hang instead of honoring Bash's no-execution/startup flags.
+        if parent in {"system32", "sysnative"}:
+            return None
+        # The Microsoft Store execution-alias is a 0-byte stub (often under
+        # WindowsApps). Piping source to it fabricates CRLF errors, so treat it
+        # as unavailable rather than reporting false syntax failures.
+        if "windowsapps" in str(Path(bash)).lower():
+            return None
+        try:
+            if Path(bash).stat().st_size == 0:
+                return None
+        except OSError:
+            return None
     return bash
 
 

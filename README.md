@@ -69,15 +69,30 @@ JS/TS graph.
 
 Requirements: Python 3.11+ and Node.js 20+ with npm.
 
+Clone, then run the idempotent bootstrap. It creates `.venv`, installs the package (the `harness`
+extra by default — pass a comma-separated extras list, or an empty string for the base package
+only), and runs the one-time `blastradius setup`. Re-running it converges on the same result.
+
 ```sh
 git clone https://github.com/Taarunkarthik/BLAST_RADIUS.git
 cd BLAST_RADIUS
+./scripts/bootstrap.sh            # Windows PowerShell: .\scripts\bootstrap.ps1
+blastradius scan --path examples/demo --deterministic-id
+```
+
+Prefer each step by hand? The manual equivalent:
+
+```sh
 python -m venv .venv
 source .venv/bin/activate        # Windows PowerShell: .\.venv\Scripts\Activate.ps1
 python -m pip install -e ".[harness]"
 blastradius setup                # one-time; after this, scans work offline
 blastradius scan --path examples/demo --deterministic-id
 ```
+
+`blastradius doctor` checks Python, Node, npm, the parser runtime, the optional extras, the database
+setting, and the audit log path, reporting `OK`/`WARN`/`FAIL` with the exact fix and exiting non-zero
+on failure.
 
 Prefer a UI? Open the local browser harness:
 
@@ -153,6 +168,20 @@ By default a scan checks up to 5,000 eligible files, each up to 2 MB. Increase t
   resolved.
 - **Measured.** CI runs a pinned real-package accuracy corpus (zero unexpected or missed diagnostics
   in the reviewed corpus) alongside unit, integration, and scale tests.
+
+## Audit log
+
+BlastRadius keeps a local, append-only JSON Lines audit log of meaningful actions (`scan`, `save`,
+`compare`, `harness_start`, and `harness_scan`). Each line records a timestamp, the project root,
+mode, report id, duration, findings, exit code, and outcome. It never records file contents,
+database URLs, or session tokens.
+
+The log is on by default at `~/.blastradius/audit.log`. Override the path with `--audit-log PATH` or
+`BLASTRADIUS_AUDIT_LOG`, and disable it with `--no-audit` (or an empty `BLASTRADIUS_AUDIT_LOG`).
+It rotates to `audit.log.1` at about 10 MB, and a broken or unwritable log never affects a scan.
+
+Review entries with `blastradius audit` — filter with `--since`, `--action`, and `--limit`, read a
+different file with `--audit-log PATH`, and use `--format json` for machine output.
 
 ## How it works
 

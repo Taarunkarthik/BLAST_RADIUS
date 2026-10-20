@@ -2,17 +2,19 @@
 
 import secrets
 import threading
+import time
 from pathlib import Path
 from typing import Literal, TypedDict
 from urllib.parse import urlsplit
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from starlette.datastructures import Headers, MutableHeaders
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
+from blastradius import audit
 from blastradius.comparison import compare_saved
 from blastradius.scanner import scan_repository
 from blastradius.storage import ScanStore, StoreError
@@ -215,15 +217,29 @@ def create_app(root: Path, *, token: str | None = None) -> FastAPI:
         }
 
     @app.post("/api/scan")
-    def scan(body: ScanRequest):
+    def scan(body: ScanRequest, request: Request):
         path = scoped_path(body.path)
         if not lock.acquire(blocking=False):
             raise HTTPException(409, "A scan or save is already running.")
+        started = time.monotonic()
+        peer = request.client.host if request.client else ""
         try:
             report = scan_repository(path, mode=body.mode, deterministic=True, max_files=body.max_files, max_bytes=body.max_bytes)
             state.update({"report": report, "path": path})
+            audit.record(
+                "harness_scan", action="scan", project_root=str(path), mode=body.mode,
+                report_id=report["scan"]["id"],
+                duration_ms=max(0, int((time.monotonic() - started) * 1000)),
+                findings=report["summary"], exit_code=0,
+                outcome="incomplete" if report["scan"]["partial"] else "ok", peer=peer,
+            )
             return report
         except (OSError, ValueError, WorkerError, RecursionError) as error:
+            audit.record(
+                "harness_scan", action="scan", project_root=str(path), mode=body.mode,
+                duration_ms=max(0, int((time.monotonic() - started) * 1000)),
+                exit_code=2, outcome="error", error=str(error), peer=peer,
+            )
             raise HTTPException(422, f"Scan could not complete: {error}") from error
         finally:
             lock.release()

@@ -57,14 +57,17 @@ def test_python_and_svg_are_never_executed_or_fetched(tmp_path):
     assert not marker.exists()
 
 
-def test_shell_valid_and_invalid_use_only_bounded_stdin(monkeypatch):
-    monkeypatch.setattr("blastradius.checkers.shutil.which", lambda _: "/trusted/bash")
+def test_shell_valid_and_invalid_use_only_bounded_stdin(monkeypatch, tmp_path):
+    fake = tmp_path / "bash"
+    fake.write_text("#!/bin/sh\n", encoding="utf-8")
+    fake_path = str(fake)
+    monkeypatch.setattr("blastradius.checkers.shutil.which", lambda _: fake_path)
     monkeypatch.setenv("BASH_ENV", "must-not-be-sourced")
     monkeypatch.setenv("ENV", "must-not-be-sourced")
     calls = []
     def run(args, **kwargs):
         calls.append((args, kwargs))
-        assert args == ["/trusted/bash", "--noprofile", "--norc", "-n"]
+        assert args == [fake_path, "--noprofile", "--norc", "-n"]
         assert "BASH_ENV" not in kwargs["env"] and "ENV" not in kwargs["env"]
         assert not kwargs.get("shell", False)
         if kwargs["input"] == "if then\n":
@@ -96,8 +99,10 @@ def test_shell_missing(monkeypatch):
         check_shell("a.sh", "invalid")
 
 
-def test_shell_unusable_and_timed_out(monkeypatch):
-    monkeypatch.setattr("blastradius.checkers.shutil.which", lambda _: "bash")
+def test_shell_unusable_and_timed_out(monkeypatch, tmp_path):
+    fake = tmp_path / "bash"
+    fake.write_text("#!/bin/sh\n", encoding="utf-8")
+    monkeypatch.setattr("blastradius.checkers.shutil.which", lambda _: str(fake))
     monkeypatch.setattr("blastradius.checkers.subprocess.run", lambda *a, **k: subprocess.CompletedProcess(a, 1, "WSL unavailable", ""))
     with pytest.raises(CheckerUnavailable):
         check_shell("a.sh", "invalid")
@@ -264,4 +269,23 @@ def test_markdown_uses_parser_skips_code_and_checks_reference_links(repository):
 def test_links_outside_root_are_not_read(repository):
     root = repository({})
     assert check_markdown(root, "README.md", "[outside](../outside.txt)")[0].type == "broken_link"
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows-specific bash resolution")
+def test_windowsapps_bash_stub_is_treated_as_unavailable(monkeypatch):
+    import blastradius.checkers as checkers
+
+    stub = r"C:\Users\example\AppData\Local\Microsoft\WindowsApps\bash.exe"
+    monkeypatch.setattr(checkers.shutil, "which", lambda _name: stub)
+    assert available_bash() is None
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows-specific bash resolution")
+def test_zero_byte_bash_is_treated_as_unavailable(monkeypatch, tmp_path):
+    import blastradius.checkers as checkers
+
+    stub = tmp_path / "bash.exe"
+    stub.write_bytes(b"")
+    monkeypatch.setattr(checkers.shutil, "which", lambda _name: str(stub))
+    assert available_bash() is None
 

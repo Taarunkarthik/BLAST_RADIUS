@@ -5,9 +5,18 @@ import anyio
 import httpx
 import pytest
 
+from blastradius import audit
 from blastradius.harness import create_app
 
 pytestmark = pytest.mark.anyio
+
+
+@pytest.fixture(autouse=True)
+def isolated_audit(tmp_path_factory, monkeypatch):
+    """Keep harness tests out of the real ~/.blastradius/audit.log."""
+    directory = tmp_path_factory.mktemp("audit")
+    monkeypatch.setenv("BLASTRADIUS_AUDIT_LOG", str(directory / "audit.log"))
+    audit.configure(path=None, enabled=True)
 
 
 def transport(app, *, client=("127.0.0.1", 50000)):
